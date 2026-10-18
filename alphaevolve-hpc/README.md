@@ -77,6 +77,7 @@ We prepackaged a set of examples to get you started. In the following section, w
 | `nbody_molecular_dynamics` | C++ | `simulation_speed_score` | Multi-node MPI orchestration |
 | `airfoil_optimization` | Python | `lift_to_drag_ratio` | Uses NeuralFoil surrogate for 2D airfoil optimization |
 | `airfoil_openfoam` | Python | `lift_to_drag_ratio` | Uses OpenFOAM-14 (`incompressibleFluid` / `airFoil2D`) for 2D RANS CFD simulation |
+| `heatsink_openfoam` | Python | `thermal_score` | Uses OpenFOAM-14 (`foamMultiRun` / `snappyHexMesh`) for 3D liquid-cooling cold-plate CHT |
 | `llm_fine_tuning_cloud_batch` | Python | `neg_eval_loss` | GPU training/evaluation (PyTorch/LoRA) on Cloud Batch |
 
 
