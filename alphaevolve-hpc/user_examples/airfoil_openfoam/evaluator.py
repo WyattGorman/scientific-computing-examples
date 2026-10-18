@@ -52,8 +52,10 @@ from alpha_evolve.visualization import get_score
 import main
 from src.kulfan_converter.kulfan_to_coord import CST_shape
 from src.optimization.optimization import (
+    CST_BOUNDS,
     DEFAULT_FLUID_VELOCITY,
     Parameters,
+    check_geometry,
     funct,
     is_openfoam_available,
 )
@@ -61,14 +63,7 @@ from src.optimization.optimization import (
 logger = logging.getLogger(__name__)
 AIRFOIL_EVALUATION_METRIC = "lift_to_drag_ratio"
 
-BOUNDS = [
-    (-0.3, -0.1),
-    (-0.3, -0.05),
-    (-0.3, -0.05),
-    (0.1, 0.3),
-    (0.05, 0.3),
-    (0.05, 0.3),
-]
+BOUNDS = list(CST_BOUNDS)
 
 BASELINE_NACA0012_X = np.array(
     [-0.171373, -0.139418, -0.149078, 0.171373, 0.139418, 0.149078],
@@ -80,7 +75,7 @@ with open(Path(__file__).parent / "main.py", "r", encoding="utf-8") as _f:
 
 
 def evaluate(eval_inputs: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
-  """Evaluates the candidate airfoil program using a single OpenFOAM-14 simulation."""
+  """Evaluates the candidate airfoil optimization program using OpenFOAM-14 CFD."""
   _ = eval_inputs
   program_name = os.getenv("_CANDIDATE_PROGRAM_ID", "local_eval_run")
   candidate_dir = os.getenv("_CANDIDATE_DIR", ".")
@@ -121,23 +116,43 @@ def evaluate(eval_inputs: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
 
     if best_x is not None and not isinstance(best_x, np.ndarray):
       try:
-        best_x = np.array(best_x, dtype=float)
+        best_x = np.array(best_x, dtype=float).flatten()
       except Exception:
         pass
 
+    # If the candidate returned only best_x without calling funct, run a single OpenFOAM simulation
     if (
-        best_score is None
-        and isinstance(best_x, np.ndarray)
+        isinstance(best_x, np.ndarray)
         and best_x.shape == (6,)
         and run_parameters.sim_count == 0
     ):
       best_score = funct(best_x, run_parameters)
+    # If the candidate returned a valid best_x that hasn't been evaluated yet and budget remains, evaluate it
+    elif (
+        isinstance(best_x, np.ndarray)
+        and best_x.shape == (6,)
+        and run_parameters.successful_sim_count < run_parameters.max_successful_sims
+        and check_geometry(best_x)[0]
+    ):
+      already_evaluated = any(
+          np.allclose(best_x, np.asarray(entry["x"], dtype=float), atol=1e-5)
+          for entry in run_parameters.eval_history
+      )
+      if not already_evaluated:
+        funct(best_x, run_parameters)
 
-    if best_score is not None:
+    # Always use the authoritative best OpenFOAM-evaluated shape recorded in run_parameters
+    if run_parameters.best_x is not None and run_parameters.best_score < 0.0:
+      best_x = run_parameters.best_x.copy()
+      best_score = float(-run_parameters.best_score)
+    elif best_score is not None:
       best_score = float(best_score)
       if best_score < 0:
         best_score = -best_score
+      if run_parameters.successful_sim_count == 0:
+        best_score = None
 
+    # Validate bounds and structural constraints of best_x
     if isinstance(best_x, np.ndarray) and best_x.shape == (6,):
       out_of_bounds_dims = []
       for i, (val, (low, high)) in enumerate(zip(best_x, BOUNDS)):
@@ -167,11 +182,21 @@ def evaluate(eval_inputs: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
   except Exception as e:
     tb = traceback.format_exc()
     logger.warning("ERROR evaluating %s: %s\n%s", program_name, e, tb)
-    best_score = None
-    error_msg = f"Exception during candidate execution: {e}\n{tb}"
+    # Even if an exception occurred late in the search, salvage the best OpenFOAM run if available
+    if run_parameters.best_x is not None and run_parameters.best_score < 0.0:
+      best_x = run_parameters.best_x.copy()
+      best_score = float(-run_parameters.best_score)
+    else:
+      best_score = None
+      error_msg = f"Exception during candidate execution: {e}\n{tb}"
 
-  diag = run_parameters.last_diagnostics
+  diag = (
+      run_parameters.best_diagnostics
+      if run_parameters.best_diagnostics
+      else run_parameters.last_diagnostics
+  )
 
+  # Save optimal CST parameters, telemetry, and full inner OpenFOAM history to candidate directory
   if best_score is not None and best_score > 0 and best_x is not None:
     try:
       result_data = {
@@ -184,14 +209,23 @@ def evaluate(eval_inputs: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
           "max_thickness": diag.get("max_thickness"),
           "max_camber": diag.get("max_camber"),
           "iterations": diag.get("iterations"),
+          "sim_count": run_parameters.sim_count,
+          "successful_sim_count": run_parameters.successful_sim_count,
+          "eval_history": run_parameters.eval_history,
       }
       result_path = Path(candidate_dir) / f"{program_name}.json"
       with open(result_path, "w", encoding="utf-8") as f:
         json.dump(result_data, f, indent=2)
-      logger.info("Saved candidate OpenFOAM results to %s", result_path)
+      logger.info(
+          "Saved candidate OpenFOAM results (%d sims, best Cl/Cd=%.4f) to %s",
+          run_parameters.successful_sim_count,
+          best_score,
+          result_path,
+      )
     except Exception as e:
       logger.warning("Failed to save CST parameters to disk: %s", e)
 
+  # Clean up temporary OpenFOAM case directory and CSV file
   try:
     if cases_folder.exists():
       shutil.rmtree(cases_folder)
@@ -202,15 +236,32 @@ def evaluate(eval_inputs: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
 
   insights = []
   if best_score is not None and best_score > 0:
+    sorted_hist = sorted(
+        run_parameters.eval_history,
+        key=lambda item: item.get("ld_ratio", 0.0),
+        reverse=True,
+    )
+    top_summary_lines = []
+    for rank, item in enumerate(sorted_hist[:4], start=1):
+      x_rounded = [round(float(v), 4) for v in item["x"]]
+      top_summary_lines.append(
+          f"#{rank}: Cl/Cd={item['ld_ratio']:.4f} (Cl={item['cl']:.4f}, Cd={item['cd']:.5f}, "
+          f"t/c={item['max_thickness']:.4f}, camber={item['max_camber']:.4f}) at x={x_rounded}"
+      )
+    history_summary = " | ".join(top_summary_lines)
+
     insights.append(
         AlphaEvolveEvaluationInsight(
             label="OPENFOAM_AERODYNAMIC_TELEMETRY",
             text=(
-                f"OpenFOAM-14 steady RANS (Spalart-Allmaras, Re=2.6e6, AoA={diag.get('aoa_deg', 8.00):.2f} deg) converged in "
-                f"{diag.get('iterations', 0)} iterations: "
-                f"Cl/Cd = {best_score:.4f} (Cl = {diag.get('cl', 0.0):.5f}, Cd = {diag.get('cd', 0.0):.5f}, Cm = {diag.get('cm', 0.0):.5f}). "
-                f"Geometry: max_thickness/c = {diag.get('max_thickness', 0.0):.4f}, max_camber/c = {diag.get('max_camber', 0.0):.4f}, "
-                f"CST weights = {np.round(best_x, 5).tolist()}."
+                f"Executed {run_parameters.successful_sim_count}/{run_parameters.max_successful_sims} "
+                f"converged OpenFOAM-14 RANS simulations ({run_parameters.sim_count} total attempts). "
+                f"Best Cl/Cd = {best_score:.4f} (Cl = {diag.get('cl', 0.0):.5f}, Cd = {diag.get('cd', 0.0):.5f}, "
+                f"Cm = {diag.get('cm', 0.0):.5f}, {diag.get('iterations', 0)} SIMPLE iterations). "
+                f"Best Geometry: max_thickness/c = {diag.get('max_thickness', 0.0):.4f} (allowed [0.08, 0.24]), "
+                f"max_camber/c = {diag.get('max_camber', 0.0):.4f}, "
+                f"CST weights = {np.round(best_x, 5).tolist()}. "
+                f"Top evaluated shapes in this run: {history_summary}"
             ),
         )
     )
@@ -361,6 +412,7 @@ def run_polar_sweep_and_plot(best_x: np.ndarray, output_dir: Path) -> None:
         df_valid["cl_cd"] = df_valid["cl"] / df_valid["cd"]
         df_valid.to_csv(output_dir / "polar_sweep_results.csv", index=False)
 
+        # Plot 1: Lift and Drag vs AoA
         fig, ax1 = plt.subplots(figsize=(10, 6))
         color = "tab:blue"
         ax1.set_xlabel("Angle of Attack (degrees)", fontsize=12)
@@ -401,6 +453,7 @@ def run_polar_sweep_and_plot(best_x: np.ndarray, output_dir: Path) -> None:
         plt.savefig(output_dir / "polar_coefficients.png", dpi=300)
         plt.close()
 
+        # Plot 2: Lift-to-Drag vs AoA
         plt.figure(figsize=(10, 6))
         plt.plot(
             df_valid["aoa"],
@@ -458,6 +511,7 @@ def postprocess(top_programs: list[dict[str, Any]]) -> None:
     output_dir = Path("results")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Save summary JSON of best candidate
     summary_path = output_dir / "best_airfoil_summary.json"
     summary_path.write_text(json.dumps(best_x_data, indent=2), encoding="utf-8")
     upload_to_gcs(

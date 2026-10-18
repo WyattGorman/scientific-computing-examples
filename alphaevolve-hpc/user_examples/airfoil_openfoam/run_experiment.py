@@ -58,16 +58,17 @@ def main() -> None:
   exp_config = {
       "title": "2D Airfoil OpenFOAM Optimization",
       "problem_description": (
-          "Evolve the `design_airfoil(parameters)` generator in Python to synthesize "
-          "the optimal 6 Kulfan Class-Shape Transformation (CST) parameters of a 2D "
-          "airfoil that maximizes the Lift-to-Drag ratio (`Cl / Cd`) when evaluated "
-          "by an OpenFOAM-14 steady-state incompressible RANS CFD simulation "
+          "Evolve the `optimize_airfoil(parameters, max_successful_simulations=16, max_total_simulations=100)` "
+          "algorithm in Python to discover the optimal 6 Kulfan Class-Shape Transformation (CST) "
+          "parameters of a 2D airfoil that maximizes the Lift-to-Drag ratio (`Cl / Cd`) when evaluated "
+          "by OpenFOAM-14 steady-state incompressible RANS CFD simulations "
           "(`tutorials/incompressibleFluid/airFoil2D`) at U = (25.75, 3.62, 0.0) m/s "
           "(AoA = 8.00 deg, nu = 1e-5 m^2/s, Re = 2.6e6, Spalart-Allmaras turbulence).\n\n"
-          "Strictly 1 OpenFOAM simulation is executed per candidate program evaluation. "
-          "Ensure the returned 6-element NumPy array lies strictly within `BOUNDS` and "
-          "maintains positive interior thickness (`0.002 < y_u(x) - y_l(x) <= 0.35`) "
-          "so `blockMesh` and `checkMesh` succeed."
+          "Each candidate program evaluation can execute up to `max_successful_simulations = 16` "
+          "converged OpenFOAM-14 simulations via `evaluate_batch(candidates, parameters, max_workers=4)` "
+          "or `funct(x, parameters)`. Ensure the returned 6-element NumPy array `best_x` lies strictly "
+          "within `BOUNDS` and passes `check_geometry(x)` (`y_u(x) - y_l(x) >= 0.002` on `x/c in [0.01, 0.99]` "
+          "and `0.08 <= max_thickness <= 0.24`) so `blockMesh` and `checkMesh` succeed."
       ),
       "program_language": "python",
       "run_settings": {
