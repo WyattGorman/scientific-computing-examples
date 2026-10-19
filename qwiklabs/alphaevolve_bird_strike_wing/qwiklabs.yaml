@@ -1,0 +1,257 @@
+schema_version: 2
+entity_type: Lab
+default_locale: en
+title: "Optimizing Aerospace Wing Bird-Strike Protection with AlphaEvolve HPC and OpenRADIOSS"
+description: "Deploy and run a 10-evaluation evolutionary aerospace wing leading-edge bird-strike optimization on Google Cloud using AlphaEvolve HPC, Cluster Toolkit, Cloud Batch, and OpenRADIOSS."
+duration: 60
+level: intermediate
+environment:
+  resources:
+    - type: gcp_project
+      id: primary_project
+      variant: gcpd_no_vpc3
+    - type: gcp_user
+      id: primary_user
+      permissions:
+        - project: primary_project
+          roles:
+            - roles/owner
+
+assessment:
+  passing_percentage: 80
+  steps:
+    - title: "Configure your environment and create the AlphaEvolve Cloud Storage bucket"
+      locale_id: step_1
+      maximum_score: 20
+      student_messages:
+        success: "Great job! You completed: Configure your environment and create the AlphaEvolve Cloud Storage bucket"
+        incomplete: "Expected Cloud Storage bucket ending in -alphaevolve-bucket not found."
+      services:
+        - primary_project.StorageV1
+      method_name: step_1_check
+      code: |-
+        # Qwiklabs Activity Tracking Step 1: Configure your environment and create the AlphaEvolve Cloud Storage bucket
+        # Runtime: Teacups (Cloud Run NsJail sandbox, read-only filesystem)
+
+        def check(handles:, maximum_score:, resources:)
+          storage = handles['primary_project.StorageV1']
+          project_id = resources.dig('primary_project', 'project_id') || resources.dig(:primary_project, :project_id) || ''
+          ret_hash = { done: false, score: 0, message: 'Checking Cloud Storage for step 1', student_message: 'incomplete' }
+
+          buckets = storage.list_buckets(project_id, freeze_args: true)&.items || []
+          target_bucket = buckets.find { |b| b.name.to_s.include?('-alphaevolve-bucket') }
+          if target_bucket
+            ret_hash = {
+              done: true,
+              score: maximum_score,
+              message: "Assessment Completed! Found bucket #{target_bucket.name}.",
+              student_message: 'success'
+            }
+          else
+            ret_hash[:message] = 'Expected Cloud Storage bucket ending in -alphaevolve-bucket not found.'
+          end
+          ret_hash
+        rescue StandardError => e
+          {
+            done: false,
+            score: 0,
+            message: "Activity tracking error in step 1: #{e.message.to_s.force_encoding('UTF-8').scrub}",
+            student_message: 'incomplete'
+          }
+        end
+
+        def step_1_check(handles:, maximum_score:, resources:)
+          check(handles: handles, maximum_score: maximum_score, resources: resources)
+        end
+    - title: "Deploy the AlphaEvolve base infrastructure with Cluster Toolkit"
+      locale_id: step_2
+      maximum_score: 20
+      student_messages:
+        success: "Great job! You completed: Deploy the AlphaEvolve base infrastructure with Cluster Toolkit"
+        incomplete: "Expected config/variables-infra.env in the AlphaEvolve Cloud Storage bucket."
+      services:
+        - primary_project.StorageV1
+      method_name: step_2_check
+      code: |-
+        # Qwiklabs Activity Tracking Step 2: Deploy the AlphaEvolve base infrastructure with Cluster Toolkit
+        # Runtime: Teacups (Cloud Run NsJail sandbox, read-only filesystem)
+
+        def check(handles:, maximum_score:, resources:)
+          storage = handles['primary_project.StorageV1']
+          project_id = resources.dig('primary_project', 'project_id') || resources.dig(:primary_project, :project_id) || ''
+          ret_hash = { done: false, score: 0, message: 'Checking Cloud Storage for step 2', student_message: 'incomplete' }
+
+          buckets = storage.list_buckets(project_id, freeze_args: true)&.items || []
+          target_bucket = buckets.find { |b| b.name.to_s.include?('-alphaevolve-bucket') }
+          if target_bucket
+            objs = storage.list_objects(target_bucket.name, prefix: 'config/variables-infra.env', freeze_args: true)&.items || []
+            if !objs.empty?
+              ret_hash = {
+                done: true,
+                score: maximum_score,
+                message: "Assessment Completed! Found config/variables-infra.env in #{target_bucket.name}.",
+                student_message: 'success'
+              }
+            else
+              ret_hash[:message] = 'Expected config/variables-infra.env in the AlphaEvolve Cloud Storage bucket.'
+            end
+          else
+            ret_hash[:message] = 'Expected AlphaEvolve Cloud Storage bucket not found.'
+          end
+          ret_hash
+        rescue StandardError => e
+          {
+            done: false,
+            score: 0,
+            message: "Activity tracking error in step 2: #{e.message.to_s.force_encoding('UTF-8').scrub}",
+            student_message: 'incomplete'
+          }
+        end
+
+        def step_2_check(handles:, maximum_score:, resources:)
+          check(handles: handles, maximum_score: maximum_score, resources: resources)
+        end
+    - title: "Deploy the 10-evaluation bird-strike experiment blueprint and container images"
+      locale_id: step_3
+      maximum_score: 20
+      student_messages:
+        success: "Great job! You completed: Deploy the 10-evaluation bird-strike experiment blueprint and container images"
+        incomplete: "Expected bird-strike/variables.env in the AlphaEvolve Cloud Storage bucket."
+      services:
+        - primary_project.StorageV1
+      method_name: step_3_check
+      code: |-
+        # Qwiklabs Activity Tracking Step 3: Deploy the 10-evaluation bird-strike experiment blueprint and container images
+        # Runtime: Teacups (Cloud Run NsJail sandbox, read-only filesystem)
+
+        def check(handles:, maximum_score:, resources:)
+          storage = handles['primary_project.StorageV1']
+          project_id = resources.dig('primary_project', 'project_id') || resources.dig(:primary_project, :project_id) || ''
+          ret_hash = { done: false, score: 0, message: 'Checking Cloud Storage for step 3', student_message: 'incomplete' }
+
+          buckets = storage.list_buckets(project_id, freeze_args: true)&.items || []
+          target_bucket = buckets.find { |b| b.name.to_s.include?('-alphaevolve-bucket') }
+          if target_bucket
+            objs = storage.list_objects(target_bucket.name, prefix: 'bird-strike/variables.env', freeze_args: true)&.items || []
+            if !objs.empty?
+              ret_hash = {
+                done: true,
+                score: maximum_score,
+                message: "Assessment Completed! Found bird-strike/variables.env in #{target_bucket.name}.",
+                student_message: 'success'
+              }
+            else
+              ret_hash[:message] = 'Expected bird-strike/variables.env in the AlphaEvolve Cloud Storage bucket.'
+            end
+          else
+            ret_hash[:message] = 'Expected AlphaEvolve Cloud Storage bucket not found.'
+          end
+          ret_hash
+        rescue StandardError => e
+          {
+            done: false,
+            score: 0,
+            message: "Activity tracking error in step 3: #{e.message.to_s.force_encoding('UTF-8').scrub}",
+            student_message: 'incomplete'
+          }
+        end
+
+        def step_3_check(handles:, maximum_score:, resources:)
+          check(handles: handles, maximum_score: maximum_score, resources: resources)
+        end
+    - title: "Submit the AlphaEvolve controller job on Cloud Batch and evaluate candidate wing designs"
+      locale_id: step_4
+      maximum_score: 20
+      student_messages:
+        success: "Great job! You completed: Submit the AlphaEvolve controller job on Cloud Batch and evaluate candidate wing designs"
+        incomplete: "Expected bird-strike/results.csv in the AlphaEvolve Cloud Storage bucket."
+      services:
+        - primary_project.StorageV1
+      method_name: step_4_check
+      code: |-
+        # Qwiklabs Activity Tracking Step 4: Submit the AlphaEvolve controller job on Cloud Batch and evaluate candidate wing designs
+        # Runtime: Teacups (Cloud Run NsJail sandbox, read-only filesystem)
+
+        def check(handles:, maximum_score:, resources:)
+          storage = handles['primary_project.StorageV1']
+          project_id = resources.dig('primary_project', 'project_id') || resources.dig(:primary_project, :project_id) || ''
+          ret_hash = { done: false, score: 0, message: 'Checking Cloud Storage for step 4', student_message: 'incomplete' }
+
+          buckets = storage.list_buckets(project_id, freeze_args: true)&.items || []
+          target_bucket = buckets.find { |b| b.name.to_s.include?('-alphaevolve-bucket') }
+          if target_bucket
+            objs = storage.list_objects(target_bucket.name, prefix: 'bird-strike/results.csv', freeze_args: true)&.items || []
+            if !objs.empty?
+              ret_hash = {
+                done: true,
+                score: maximum_score,
+                message: "Assessment Completed! Found bird-strike/results.csv in #{target_bucket.name}.",
+                student_message: 'success'
+              }
+            else
+              ret_hash[:message] = 'Expected bird-strike/results.csv in the AlphaEvolve Cloud Storage bucket.'
+            end
+          else
+            ret_hash[:message] = 'Expected AlphaEvolve Cloud Storage bucket not found.'
+          end
+          ret_hash
+        rescue StandardError => e
+          {
+            done: false,
+            score: 0,
+            message: "Activity tracking error in step 4: #{e.message.to_s.force_encoding('UTF-8').scrub}",
+            student_message: 'incomplete'
+          }
+        end
+
+        def step_4_check(handles:, maximum_score:, resources:)
+          check(handles: handles, maximum_score: maximum_score, resources: resources)
+        end
+    - title: "Generate and verify the evolved wing bird-strike results in Cloud Storage"
+      locale_id: step_5
+      maximum_score: 20
+      student_messages:
+        success: "Great job! You completed: Generate and verify the evolved wing bird-strike results in Cloud Storage"
+        incomplete: "Expected bird-strike/results/best_wing_design.json in the AlphaEvolve Cloud Storage bucket."
+      services:
+        - primary_project.StorageV1
+      method_name: step_5_check
+      code: |-
+        # Qwiklabs Activity Tracking Step 5: Generate and verify the evolved wing bird-strike results in Cloud Storage
+        # Runtime: Teacups (Cloud Run NsJail sandbox, read-only filesystem)
+
+        def check(handles:, maximum_score:, resources:)
+          storage = handles['primary_project.StorageV1']
+          project_id = resources.dig('primary_project', 'project_id') || resources.dig(:primary_project, :project_id) || ''
+          ret_hash = { done: false, score: 0, message: 'Checking Cloud Storage for step 5', student_message: 'incomplete' }
+
+          buckets = storage.list_buckets(project_id, freeze_args: true)&.items || []
+          target_bucket = buckets.find { |b| b.name.to_s.include?('-alphaevolve-bucket') }
+          if target_bucket
+            objs = storage.list_objects(target_bucket.name, prefix: 'bird-strike/results/best_wing_design.json', freeze_args: true)&.items || []
+            if !objs.empty?
+              ret_hash = {
+                done: true,
+                score: maximum_score,
+                message: "Assessment Completed! Found bird-strike/results/best_wing_design.json in #{target_bucket.name}.",
+                student_message: 'success'
+              }
+            else
+              ret_hash[:message] = 'Expected bird-strike/results/best_wing_design.json in the AlphaEvolve Cloud Storage bucket.'
+            end
+          else
+            ret_hash[:message] = 'Expected AlphaEvolve Cloud Storage bucket not found.'
+          end
+          ret_hash
+        rescue StandardError => e
+          {
+            done: false,
+            score: 0,
+            message: "Activity tracking error in step 5: #{e.message.to_s.force_encoding('UTF-8').scrub}",
+            student_message: 'incomplete'
+          }
+        end
+
+        def step_5_check(handles:, maximum_score:, resources:)
+          check(handles: handles, maximum_score: maximum_score, resources: resources)
+        end

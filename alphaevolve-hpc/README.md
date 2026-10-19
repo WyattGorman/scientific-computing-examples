@@ -80,6 +80,7 @@ We prepackaged a set of examples to get you started. In the following section, w
 | `heatsink_openfoam` | Python | `thermal_score` | Uses OpenFOAM-14 (`foamMultiRun` / `snappyHexMesh`) for 3D liquid-cooling cold-plate CHT |
 | `llm_fine_tuning_cloud_batch` | Python | `neg_eval_loss` | GPU training/evaluation (PyTorch/LoRA) on Cloud Batch |
 | `cell_phone_drop_openradioss` | Python | `drop_protection_score` | Uses OpenRADIOSS 3D explicit FEA for multi-orientation 1.5 m smartphone drop protection |
+| `bird_strike_wing` | Python | `bird_strike_score` | Uses OpenRADIOSS 3D SPH + Shell FEA for aerospace wing leading-edge bird-strike optimization |
 
 
 ## Deploying the Solution with a Preconfigured Example

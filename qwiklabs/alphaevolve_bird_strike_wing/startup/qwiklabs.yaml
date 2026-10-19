@@ -1,0 +1,8 @@
+environment:
+  resources:
+    - type: gcp_project
+      id: project_0
+      variant: gcpd_no_vpc3
+      startup_script:
+        type: qwiklabs
+        path: startup
