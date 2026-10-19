@@ -1,0 +1,325 @@
+schema_version: 2
+entity_type: Lab
+default_locale: en
+title: "Optimizing 3D Liquid-Cooling Heat Sinks with OpenFOAM-14, AlphaEvolve HPC, and Google Cloud Cluster Toolkit"
+description: "Deploy and run an evolutionary 3D multi-region Conjugate Heat Transfer (CHT) liquid-cooling cold-plate optimization environment for Google DeepMind AlphaEvolve using OpenFOAM-14, Google Cloud Cluster Toolkit, Cloud Batch, and Vertex AI Colab Enterprise."
+instruction:
+  type: md
+  uri: instructions/en.md
+duration: 60
+max_duration: 90
+credits: 5
+level: intermediate
+tags:
+  - hpc
+  - alphaevolve
+  - openfoam
+  - cluster-toolkit
+  - cloud-batch
+  - eda
+product_tags:
+  - compute engine
+  - vertex ai
+  - cloud storage
+role_tags:
+  - developer
+  - data-scientist
+  - infrastructure-architect
+domain_tags:
+  - portfolio_infrastructure
+  - portfolio_ai
+environment:
+  resources:
+    - type: gcp_project
+      id: project_0
+      variant: gcpd
+      default_region: us-central1
+      default_zone: us-central1-a
+      allowed_locations: ['us-central1', 'us-west1', 'us-west4', 'us-east1', 'us-east4']
+      startup_script:
+        type: qwiklabs
+        path: tf
+    - type: gcp_user
+      id: primary_user
+      variant: gcp_only
+      permissions:
+        - project: project_0
+          roles:
+            - roles/owner
+  student_visible_outputs:
+    - label: "Open Google Console"
+      reference: project_0.console_url
+    - label: "Username"
+      reference: primary_user.username
+    - label: "Password"
+      reference: primary_user.password
+    - label: "GCP Project ID"
+      reference: project_0.project_id
+    - label: "GCP Region"
+      reference: project_0.default_region
+    - label: "GCP Zone"
+      reference: project_0.default_zone
+
+assessment:
+  passing_percentage: 80
+  steps:
+    - title: "Configure your environment and create the AlphaEvolve Cloud Storage bucket"
+      locale_id: step_1
+      maximum_score: 20
+      student_messages:
+        success: "Great job! You configured your environment and created the AlphaEvolve Cloud Storage bucket."
+        incomplete: "Please create the regional AlphaEvolve Cloud Storage bucket in us-central1."
+      services:
+        - project_0.StorageV1
+      method_name: step_1_check  # Assessments file: assessments/step_1_check.rb
+      code: |-
+        # Qwiklabs Activity Tracking Step 1: Configure your environment and create the AlphaEvolve Cloud Storage bucket
+        # Runtime: Teacups (Cloud Run NsJail sandbox, read-only filesystem)
+
+        def check(handles:, maximum_score:, resources:)
+          storage = handles['project_0.StorageV1']
+          project_id = resources.dig('project_0', 'project_id') || resources.dig(:project_0, :project_id) || ''
+          expected_bucket = "#{project_id}-alphaevolve-bucket"
+          ret_hash = {
+            done: false,
+            score: 0,
+            message: "Checking for Cloud Storage bucket #{expected_bucket}.",
+            student_message: 'incomplete'
+          }
+
+          buckets = storage.list_buckets(project_id, freeze_args: true)&.items || []
+          target_bucket = buckets.find { |b| b.name.to_s == expected_bucket || b.name.to_s.include?('alphaevolve-bucket') }
+          if target_bucket
+            ret_hash = {
+              done: true,
+              score: maximum_score,
+              message: "Assessment Completed! Found AlphaEvolve bucket #{target_bucket.name}.",
+              student_message: 'success'
+            }
+          else
+            ret_hash[:message] = "Expected Cloud Storage bucket #{expected_bucket} not found."
+          end
+          ret_hash
+        rescue StandardError => e
+          {
+            done: false,
+            score: 0,
+            message: "Activity tracking error in step 1: #{e.message.to_s.force_encoding('UTF-8').scrub}",
+            student_message: 'incomplete'
+          }
+        end
+
+        def step_1_check(handles:, maximum_score:, resources:)
+          check(handles: handles, maximum_score: maximum_score, resources: resources)
+        end
+    - title: "Deploy the AlphaEvolve base infrastructure with Cluster Toolkit"
+      locale_id: step_2
+      maximum_score: 20
+      student_messages:
+        success: "Great job! You deployed the AlphaEvolve base infrastructure with Cluster Toolkit."
+        incomplete: "Please deploy alpha-evolve-infra.yaml using Cluster Toolkit."
+      services:
+        - project_0.StorageV1
+      method_name: step_2_check  # Assessments file: assessments/step_2_check.rb
+      code: |-
+        # Qwiklabs Activity Tracking Step 2: Deploy the AlphaEvolve base infrastructure with Cluster Toolkit
+        # Runtime: Teacups (Cloud Run NsJail sandbox, read-only filesystem)
+
+        def check(handles:, maximum_score:, resources:)
+          storage = handles['project_0.StorageV1']
+          project_id = resources.dig('project_0', 'project_id') || resources.dig(:project_0, :project_id) || ''
+          bucket_name = "#{project_id}-alphaevolve-bucket"
+          ret_hash = {
+            done: false,
+            score: 0,
+            message: 'Checking for staged AlphaEvolve base infrastructure files in Cloud Storage.',
+            student_message: 'incomplete'
+          }
+
+          objects = storage.list_objects(bucket_name, freeze_args: true)&.items || []
+          object_names = objects.map { |o| o.name.to_s }
+          has_infra_env = object_names.include?('config/variables-infra.env')
+          has_notebook = object_names.include?('notebook/run_notebook.ipynb')
+
+          if has_infra_env && has_notebook
+            ret_hash = {
+              done: true,
+              score: maximum_score,
+              message: 'Assessment Completed! Verified config/variables-infra.env and notebook/run_notebook.ipynb.',
+              student_message: 'success'
+            }
+          else
+            ret_hash[:message] = 'Expected config/variables-infra.env and notebook/run_notebook.ipynb in the AlphaEvolve bucket.'
+          end
+          ret_hash
+        rescue StandardError => e
+          {
+            done: false,
+            score: 0,
+            message: "Activity tracking error in step 2: #{e.message.to_s.force_encoding('UTF-8').scrub}",
+            student_message: 'incomplete'
+          }
+        end
+
+        def step_2_check(handles:, maximum_score:, resources:)
+          check(handles: handles, maximum_score: maximum_score, resources: resources)
+        end
+    - title: "Deploy the 3D heat sink optimization experiment blueprint and container images"
+      locale_id: step_3
+      maximum_score: 20
+      student_messages:
+        success: "Great job! You deployed the 3D heat sink optimization experiment blueprint and container images."
+        incomplete: "Please deploy alpha-evolve-experiment.yaml for the heatsink-foam experiment."
+      services:
+        - project_0.StorageV1
+      method_name: step_3_check  # Assessments file: assessments/step_3_check.rb
+      code: |-
+        # Qwiklabs Activity Tracking Step 3: Deploy the 3D heat sink optimization experiment blueprint and container images
+        # Runtime: Teacups (Cloud Run NsJail sandbox, read-only filesystem)
+
+        def check(handles:, maximum_score:, resources:)
+          storage = handles['project_0.StorageV1']
+          project_id = resources.dig('project_0', 'project_id') || resources.dig(:project_0, :project_id) || ''
+          bucket_name = "#{project_id}-alphaevolve-bucket"
+          ret_hash = {
+            done: false,
+            score: 0,
+            message: 'Checking for heatsink-foam experiment deployment config in Cloud Storage.',
+            student_message: 'incomplete'
+          }
+
+          objects = storage.list_objects(bucket_name, prefix: 'heatsink-foam/', freeze_args: true)&.items || []
+          has_exp_env = objects.any? { |o| o.name.to_s == 'heatsink-foam/variables.env' }
+
+          if has_exp_env
+            ret_hash = {
+              done: true,
+              score: maximum_score,
+              message: 'Assessment Completed! Found heatsink-foam/variables.env from alpha-evolve-experiment.yaml deployment.',
+              student_message: 'success'
+            }
+          else
+            ret_hash[:message] = 'Expected heatsink-foam/variables.env in the AlphaEvolve bucket after deploying alpha-evolve-experiment.yaml.'
+          end
+          ret_hash
+        rescue StandardError => e
+          {
+            done: false,
+            score: 0,
+            message: "Activity tracking error in step 3: #{e.message.to_s.force_encoding('UTF-8').scrub}",
+            student_message: 'incomplete'
+          }
+        end
+
+        def step_3_check(handles:, maximum_score:, resources:)
+          check(handles: handles, maximum_score: maximum_score, resources: resources)
+        end
+    - title: "Submit the AlphaEvolve Controller job on Cloud Batch and monitor candidate results"
+      locale_id: step_4
+      maximum_score: 20
+      student_messages:
+        success: "Great job! You launched the AlphaEvolve evolutionary loop and recorded candidate evaluations."
+        incomplete: "Please launch the AlphaEvolve Controller job and verify candidate evaluations in Cloud Storage."
+      services:
+        - project_0.StorageV1
+      method_name: step_4_check  # Assessments file: assessments/step_4_check.rb
+      code: |-
+        # Qwiklabs Activity Tracking Step 4: Submit the AlphaEvolve Controller job on Cloud Batch and monitor candidate results
+        # Runtime: Teacups (Cloud Run NsJail sandbox, read-only filesystem)
+
+        def check(handles:, maximum_score:, resources:)
+          storage = handles['project_0.StorageV1']
+          project_id = resources.dig('project_0', 'project_id') || resources.dig(:project_0, :project_id) || ''
+          bucket_name = "#{project_id}-alphaevolve-bucket"
+          ret_hash = {
+            done: false,
+            score: 0,
+            message: 'Checking for AlphaEvolve 3D heat sink candidate evaluations in Cloud Storage.',
+            student_message: 'incomplete'
+          }
+
+          objects = storage.list_objects(bucket_name, prefix: 'heatsink-foam/', freeze_args: true)&.items || []
+          object_names = objects.map { |o| o.name.to_s }
+          has_results = object_names.include?('heatsink-foam/current_experiment.json') ||
+                        object_names.include?('heatsink-foam/results.csv') ||
+                        object_names.any? { |n| n.start_with?('heatsink-foam/program_candidates/') } ||
+                        object_names.any? { |n| n.start_with?('heatsink-foam/archive/program_candidates/') }
+
+          if has_results
+            ret_hash = {
+              done: true,
+              score: maximum_score,
+              message: 'Assessment Completed! Found AlphaEvolve 3D heat sink candidate evaluation artifacts in Cloud Storage.',
+              student_message: 'success'
+            }
+          else
+            ret_hash[:message] = 'Expected heatsink-foam/results.csv or candidate evaluation files in the AlphaEvolve bucket.'
+          end
+          ret_hash
+        rescue StandardError => e
+          {
+            done: false,
+            score: 0,
+            message: "Activity tracking error in step 4: #{e.message.to_s.force_encoding('UTF-8').scrub}",
+            student_message: 'incomplete'
+          }
+        end
+
+        def step_4_check(handles:, maximum_score:, resources:)
+          check(handles: handles, maximum_score: maximum_score, resources: resources)
+        end
+    - title: "Inspect the champion 3D cold-plate design and upload CHT plots to Cloud Storage"
+      locale_id: step_5
+      maximum_score: 20
+      student_messages:
+        success: "Great job! You inspected the champion 3D cold-plate design and uploaded the OpenFOAM-14 CHT plots to Cloud Storage."
+        incomplete: "Please inspect the champion cold-plate design and ensure best_heatsink_summary.json and optimized_heatsink.png are in Cloud Storage."
+      services:
+        - project_0.StorageV1
+      method_name: step_5_check  # Assessments file: assessments/step_5_check.rb
+      code: |-
+        # Qwiklabs Activity Tracking Step 5: Inspect the champion 3D cold-plate design and upload CHT plots to Cloud Storage
+        # Runtime: Teacups (Cloud Run NsJail sandbox, read-only filesystem)
+
+        def check(handles:, maximum_score:, resources:)
+          storage = handles['project_0.StorageV1']
+          project_id = resources.dig('project_0', 'project_id') || resources.dig(:project_0, :project_id) || ''
+          bucket_name = "#{project_id}-alphaevolve-bucket"
+          ret_hash = {
+            done: false,
+            score: 0,
+            message: 'Checking for champion cold-plate summary JSON and OpenFOAM-14 CHT plots in Cloud Storage.',
+            student_message: 'incomplete'
+          }
+
+          objects = storage.list_objects(bucket_name, prefix: 'heatsink-foam/results/', freeze_args: true)&.items || []
+          object_names = objects.map { |o| o.name.to_s }
+          required_artifacts = [
+            'heatsink-foam/results/best_heatsink_summary.json',
+            'heatsink-foam/results/optimized_heatsink.png'
+          ]
+          missing = required_artifacts.reject { |item| object_names.include?(item) }
+
+          if missing.empty?
+            ret_hash = {
+              done: true,
+              score: maximum_score,
+              message: 'Assessment Completed! Verified best_heatsink_summary.json and optimized_heatsink.png in Cloud Storage.',
+              student_message: 'success'
+            }
+          else
+            ret_hash[:message] = "Missing expected visualization artifacts in gs://#{bucket_name}/: #{missing.join(', ')}"
+          end
+          ret_hash
+        rescue StandardError => e
+          {
+            done: false,
+            score: 0,
+            message: "Activity tracking error in step 5: #{e.message.to_s.force_encoding('UTF-8').scrub}",
+            student_message: 'incomplete'
+          }
+        end
+
+        def step_5_check(handles:, maximum_score:, resources:)
+          check(handles: handles, maximum_score: maximum_score, resources: resources)
+        end
