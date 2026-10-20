@@ -1,0 +1,27 @@
+# Energy & Subsurface Geoscience: 2D Acoustic Seismic Wave Propagation Stencil & Sponge Optimization
+
+This example demonstrates how to use AlphaEvolve to co-evolve a **dispersion-relation-preserving (DRP) isotropic finite-difference stencil, Lax-Wendroff temporal correction, and impedance-matched absorbing boundary sponge** (`propagate_seismic_wavefield` in `main.cpp`) for Reverse Time Migration (RTM) and Full Waveform Inversion (FWI).
+
+## Geophysical Problem Overview
+
+Low-order finite-difference acoustic propagators (`O(dx^2, dt^2)`) suffer from three severe numerical artifacts in complex salt-basin velocity models:
+1. **Numerical Grid Dispersion**: High-frequency wavelet components travel at erroneous phase velocities in low-velocity (`1650 m/s`) shallow sediments unless the spatial derivative weights are dispersion-optimized.
+2. **45-Degree Grid Anisotropy**: Pure axial cross stencils propagate wavefronts at different phase velocities along grid axes (`0 deg`, `90 deg`) vs diagonals (`45 deg`), distorting steep fault-plane reflections.
+3. **Spurious Boundary Reflections**: A compact `24`-cell absorbing sponge layer reflects outgoing energy back into the receiver array if the damping profile `sigma(d)` creates an abrupt acoustic impedance jump at the sponge entry or fails to attenuate grazing-incidence waves.
+
+## Multi-Model Reference Benchmark & Anti-Cheat Guardrails (`main.cpp` & `evaluator.py`)
+
+- **Model 1 — Marmousi-II Unconformity & Salt Diapir Lens**: Stratified anticline (`1650 -> 3450 m/s`) surrounding a high-contrast `4350 m/s` salt body (`f0 = 22 Hz` Ricker source).
+- **Model 2 (Held-Out Generalization) — Steep 52-Degree Sub-Salt Overthrust Fault**: Off-center `f0 = 25 Hz` Ricker source illuminating a steep fault plane intersecting a `4420 m/s` salt wedge.
+- **Reflection-Free Gold Reference**: Ground-truth receiver seismograms and interior wavefields are computed on an **ultra-wide domain (`pad = 112` cells)** so boundary reflections cannot physically reach the interior within `Nt = 700` steps.
+- **Extended-Time CFL Stability Gate**: Runs the candidate propagator for `1400` steps (`2x` simulation horizon) and verifies that late-time wavefield energy `E(1400) / E(700) <= 1.05` with zero `NaN`/`Inf`.
+
+## Quickstart
+
+```bash
+# Compile and run the C++ seismic benchmark directly
+make && /var/tmp/seismic_sim
+
+# Launch local evolutionary search
+ae-run -c experiment.yaml
+```

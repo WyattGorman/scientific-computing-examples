@@ -81,6 +81,11 @@ We prepackaged a set of examples to get you started. In the following section, w
 | `llm_fine_tuning_cloud_batch` | Python | `neg_eval_loss` | GPU training/evaluation (PyTorch/LoRA) on Cloud Batch |
 | `cell_phone_drop_openradioss` | Python | `drop_protection_score` | Uses OpenRADIOSS 3D explicit FEA for multi-orientation 1.5 m smartphone drop protection |
 | `bird_strike_wing` | Python | `bird_strike_score` | Uses OpenRADIOSS 3D SPH + Shell FEA for aerospace wing leading-edge bird-strike optimization |
+| `fsi_var_monte_carlo` | C++ | `effective_speedup_score` | Quantitative Finance: 99.9% Tail VaR / CVaR Monte Carlo variance reduction & SIMD/MPI kernel optimization |
+| `drug_discovery_docking` | Python | `multiparameter_docking_score` | Life Sciences: 3D structure-based ligand design (`RDKit` + AutoDock Vina/Coulomb SE(3) pose optimization) across KRAS G12D & held-out EGFR T790M |
+| `coronary_stent_openradioss` | Python | `stent_clinical_fitness_score` | Medical Device FEA: 3-stage L605 CoCr coronary stent inflation, elastic recoil unloading, and radial crush optimization with OpenRADIOSS |
+| `eda_openroad_ppa_floorplan` | Python | `ppa_composite_score` | Semiconductor EDA: 7nm ASAP7 RISC-V + NPU tile macro floorplanning, `RePlAce`/`FastRoute` congestion, and 3-corner `OpenSTA` timing closure |
+| `seismic_wave_propagation_stencil` | C++ | `seismic_accuracy_speedup_score` | Energy & Geoscience: 2D heterogeneous Marmousi-II & sub-salt fault acoustic wave propagation DRP stencil and absorbing sponge optimization |
 
 
 ## Deploying the Solution with a Preconfigured Example
