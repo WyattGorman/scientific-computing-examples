@@ -16,12 +16,23 @@ Low-order finite-difference acoustic propagators (`O(dx^2, dt^2)`) suffer from t
 - **Reflection-Free Gold Reference**: Ground-truth receiver seismograms and interior wavefields are computed on an **ultra-wide domain (`pad = 112` cells)** so boundary reflections cannot physically reach the interior within `Nt = 700` steps.
 - **Extended-Time CFL Stability Gate**: Runs the candidate propagator for `1400` steps (`2x` simulation horizon) and verifies that late-time wavefield energy `E(1400) / E(700) <= 1.05` with zero `NaN`/`Inf`.
 
+## Baseline vs. Evolved Champion Wavefield & Seismogram Comparison
+
+![Seismic 2D Wavefield & Stencil Comparison](seismic_wavefield_stencil_comparison.png)
+
+![Seismic 2D Wavefield Propagation Animation](seismic_wavefield_propagation.gif)
+
+- **Panel (A) — Marmousi-II Velocity Model $v_p(x, z)$ & Survey Geometry**: Shows the folded anticline (`1650 -> 3450 m/s`), the high-contrast `4350 m/s` salt diapir lens, the `24`-cell absorbing sponge perimeter, the `22 Hz` Ricker point source, and the 48-receiver surface hydrophone array.
+- **Panel (B) — 2D Wavefield Snapshots $u(x, z, t=280\text{ ms})$**: Compares the baseline 2nd-order 5-point cross stencil (`Interior NRMS = 1.713`, `Late Refl = 0.644`) against the evolved 8th-order dispersion-relation-preserving (DRP) isotropic 25-point stencil with 4th-order Lax-Wendroff temporal correction and cubic/quartic sponge (`Interior NRMS = 0.240`, `Late Refl = 0.110`).
+- **Panel (C) — Surface Receiver Shot Gather & Far-Offset Waveform Overlay**: Compares Receiver `#39` (`x = 1.58 km`) seismograms against the ultra-wide reflection-free Gold Reference (`pad = 80`), showing elimination of both high-wavenumber phase dispersion and late-time (`t >= 260 ms`) boundary reflections.
+- **Panel (D) — Multi-Model NRMS Error Breakdown & Speedup Scorecard**: Summarizes accuracy and reflection suppression across both **Marmousi-II** and the held-out **52-Degree Sub-Salt Overthrust Fault** (`seismic_accuracy_speedup_score = 1.00 -> 6.18`, `0.60 GCell/s`).
+
 ## Quickstart
 
 ```bash
-# Compile and run the C++ seismic benchmark directly
-make && /var/tmp/seismic_sim
+# Compile, evaluate, and generate static + animated wavefield visualizations
+python3 run_experiment.py
 
-# Launch local evolutionary search
+# Launch local evolutionary search (automatically invokes postprocess)
 ae-run -c experiment.yaml
 ```

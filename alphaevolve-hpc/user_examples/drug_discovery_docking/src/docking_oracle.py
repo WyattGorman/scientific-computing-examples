@@ -855,6 +855,7 @@ class DockingOracle:
         "lipinski_violations": int(lipinski_violations),
         "max_seed_tanimoto": round(props["max_seed_tanimoto"], 4),
         "docked_heavy_xyz": best_pose_coords.round(3).tolist(),
+        "lig_types": list(props["lig_types"]),
         "n_conformers": len(props["conformer_coords"]),
         "used_rdkit": bool(self._has_rdkit),
     }
@@ -895,9 +896,17 @@ def evaluate_molecule_3d(
       "qed": res["qed"],
       "sa_score": res["sa_score"],
       "strain_kcal": res["strain_kcal"],
+      "mw": res.get("mw", 0.0),
+      "logp": res.get("logp", 0.0),
+      "tpsa": res.get("tpsa", 0.0),
+      "key_hbonds": res.get("key_hbonds", 0),
+      "salt_bridges": res.get("salt_bridges", 0),
+      "docked_heavy_xyz": res.get("docked_heavy_xyz", []),
+      "lig_types": res.get("lig_types", []),
       "anchor_match_ratio": round(anchor_ratio, 3),
       "used_rdkit": bool(oracle._has_rdkit),
   }
+
 
 
 def compute_scaffold_diversity(smiles_list: list[str]) -> float:

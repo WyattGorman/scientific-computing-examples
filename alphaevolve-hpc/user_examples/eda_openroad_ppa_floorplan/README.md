@@ -16,12 +16,21 @@ In hierarchical ASIC physical design, hard SRAM macro placement (`(x_um, y_um, o
 2. **Stage 2 — `TritonCTS` Clock Skew & 3-Corner `OpenSTA` Signoff**:
    - Evaluates Worst Negative Slack (`WNS`), Total Negative Slack (`TNS`), and clock-tree skew across all three 7nm ASAP7 PVT corners (`ss_0p63v_100c`, `tt_0p70v_25c`, `ff_0p77v_m40c`) at a `500 ps` (`2.0 GHz`) clock target, along with dynamic switching + repeater + CTS + leakage power (`mW`).
 
+## Baseline vs. Evolved Champion Floorplan & Multi-Corner PPA Comparison
+
+![OpenROAD 7nm ASAP7 Macro Floorplan & PPA Comparison](openroad_floorplan_ppa_comparison.png)
+
+- **Panel (A) — Baseline 2-Column Macro Grid (`ppa_composite_score = -50.65`)**: Places `SRAM_ICACHE_1`, `SRAM_DCACHE_1`, `SRAM_NPU_WT_1`, and `SRAM_L2_BANK_0` at `x = 520 um` directly across the central `TritonCTS` clock spine (`x in [380, 820] um`), fragmenting the standard-cell core, adding `+39.0 ps` of clock-spine blockage skew, and causing severe setup violations (`Worst WNS = -72.9 ps`, `Total TNS = -245.5 ps`).
+- **Panel (B) — Champion Evolved Perimeter-Banked Floorplan (`ppa_composite_score = +25.03`)**: Banks the CPU instruction/data cache SRAMs along the West perimeter (`x = 34 um`, `R0` with East-facing M4 pins) and the NPU weight/activation/L2 SRAMs along the East perimeter (`x = 936..966 um`, flipped to `MY` so active M4 signal pins face West into the interior core channel), clearing the central standard-cell sea and eliminating clock-spine blockage (`0.0 ps` penalty).
+- **Panel (C) — 24x24 GCell `FastRoute` RUDY Congestion Maps**: Shows routing demand/supply utilization across the `[20, 20, 1180, 1180] um` core, where the perimeter-banked champion eliminates central M2–M5 macro routing detours and reduces weighted HPWL from `1223.9 mm` to `890.9 mm`.
+- **Panel (D) — 3-Corner `OpenSTA` Setup Timing Slacks (`ss_0p63v_100c`, `tt_0p70v_25c`, `ff_0p77v_m40c`)**: Demonstrates positive setup timing closure across all 6 critical paths and all 3 PVT corners (`Worst WNS = +22.4 ps`, `Total TNS = 0.0 ps`, `Total Power = 57.10 mW`).
+
 ## Quickstart
 
 ```bash
-# Run local baseline verification
-python3 evaluator.py
+# Run local baseline verification and generate comparison visualization
+python3 run_experiment.py
 
-# Launch evolutionary search
+# Launch evolutionary search (automatically invokes postprocess)
 ae-run -c experiment.yaml
 ```

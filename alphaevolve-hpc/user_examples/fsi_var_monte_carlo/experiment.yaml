@@ -46,3 +46,4 @@ seed_files:
 evaluator:
   script: "evaluator.py"
   method: "evaluate"
+  postprocess_method: "postprocess"

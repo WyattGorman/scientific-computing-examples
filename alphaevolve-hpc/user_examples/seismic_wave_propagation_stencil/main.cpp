@@ -456,9 +456,73 @@ bool verify_extended_cfl_stability(double* energy_ratio_out) {
   return (*energy_ratio_out <= 1.05);
 }
 
+void dump_wavefields_json(const char* out_path) {
+  const int phys_nx = kNx - 2 * kNPad;
+  const int phys_nz = kNz - 2 * kNPad;
+  std::vector<int> rx_phys(kNumReceivers);
+  std::vector<int> rx_cand(kNumReceivers);
+  for (int r = 0; r < kNumReceivers; ++r) {
+    rx_phys[r] = 4 + (r * (phys_nx - 8)) / (kNumReceivers - 1);
+    rx_cand[r] = rx_phys[r] + kNPad;
+  }
+  std::vector<float> ref_traces;
+  std::vector<float> ref_interior;
+  run_gold_reference_solver(
+      0, 22.0f, phys_nx / 2, 2, rx_phys, 2, &ref_traces, &ref_interior);
+
+  std::vector<float> vp_cand;
+  build_velocity_model(0, kNx, kNz, kNPad, &vp_cand);
+  std::vector<float> wavelet;
+  build_ricker_wavelet(22.0f, kNt, kDt, &wavelet);
+  std::vector<float> cand_traces(kNumReceivers * kNt, 0.0f);
+  std::vector<float> cand_wavefield(kNx * kNz, 0.0f);
+  propagate_seismic_wavefield(
+      vp_cand.data(),
+      wavelet.data(),
+      kNx,
+      kNz,
+      kNPad,
+      kNt,
+      kDx,
+      kDt,
+      phys_nx / 2 + kNPad,
+      2 + kNPad,
+      rx_cand.data(),
+      2 + kNPad,
+      kNumReceivers,
+      cand_traces.data(),
+      cand_wavefield.data());
+
+  FILE* fp = std::fopen(out_path, "w");
+  if (!fp) return;
+  std::fprintf(fp, "{\n  \"nx\": %d, \"nz\": %d, \"n_pad\": %d, \"nt\": %d,\n",
+               kNx, kNz, kNPad, kNt);
+  const int r_far = 38;
+  std::fprintf(fp, "  \"far_receiver_index\": %d,\n  \"cand_far_trace\": [", r_far);
+  for (int it = 0; it < kNt; ++it) {
+    std::fprintf(fp, "%s%.6f", (it == 0 ? "" : ", "), cand_traces[r_far * kNt + it]);
+  }
+  std::fprintf(fp, "],\n  \"ref_far_trace\": [");
+  for (int it = 0; it < kNt; ++it) {
+    std::fprintf(fp, "%s%.6f", (it == 0 ? "" : ", "), ref_traces[r_far * kNt + it]);
+  }
+  std::fprintf(fp, "]\n}\n");
+  std::fclose(fp);
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  const char* dump_path = nullptr;
+  for (int i = 1; i + 1 < argc; ++i) {
+    if (std::strcmp(argv[i], "--dump-wavefields") == 0) {
+      dump_path = argv[i + 1];
+    }
+  }
+  if (dump_path != nullptr) {
+    dump_wavefields_json(dump_path);
+  }
+
   double ms_marmousi = 0.0;
   double ms_fault = 0.0;
 

@@ -35,7 +35,7 @@ problem_description: |
     must lie in `[10.0%, 22.0%]` (optimal drug-eluting window around `14.5%`).
 program_language: "python"
 primary_metric: "stent_clinical_fitness_score"
-initial_score: -25.7366
+initial_score: -22.3044
 
 seed_files:
   - "main.py"
@@ -43,3 +43,4 @@ seed_files:
 evaluator:
   script: "evaluator.py"
   method: "evaluate"
+  postprocess_method: "postprocess"

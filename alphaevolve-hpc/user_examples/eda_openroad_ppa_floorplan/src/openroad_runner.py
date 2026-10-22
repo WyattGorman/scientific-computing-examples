@@ -55,6 +55,15 @@ def find_openroad_binary() -> Optional[Path]:
       if cand.is_file() and os.access(cand, os.X_OK):
         return cand
 
+  for direct_bin in (
+      Path("/OpenROAD-Flow-Scripts/tools/install/OpenROAD/bin/openroad"),
+      Path("/tmp/openroad_test/openroad_headless"),
+      Path("/usr/local/bin/openroad"),
+      Path("/usr/bin/openroad"),
+  ):
+    if direct_bin.is_file() and os.access(direct_bin, os.X_OK):
+      return direct_bin
+
   for name in ("openroad_headless", "openroad"):
     found = shutil.which(name)
     if found:
@@ -69,6 +78,12 @@ def find_asap7_pdk_dir() -> Optional[Path]:
     return Path(env_pdk)
 
   here = Path(__file__).resolve()
+  sample_dir = here.parents[1]
+  candidates = [
+      sample_dir / "models" / "asap7",
+      Path("/opt/asap7"),
+      Path("/tmp/openroad_test/asap7"),
+  ]
   roots = [Path.cwd()]
   if len(here.parents) >= 8:
     roots.append(here.parents[7])
@@ -78,7 +93,9 @@ def find_asap7_pdk_dir() -> Optional[Path]:
     roots.append(Path(test_srcdir) / "_main")
 
   for root in roots:
-    cand = root / "third_party/open_road/test/asap7"
+    candidates.append(root / "third_party/open_road/test/asap7")
+
+  for cand in candidates:
     if (
         (cand / "asap7_tech_1x_201209.lef").is_file()
         and (cand / "asap7sc7p5t_28_R_1x_220121a.lef").is_file()
@@ -1209,6 +1226,7 @@ def evaluate_floorplan_ppa(
         + 0.80 * or_dyn_scale
     )
 
+  util_grid = demand_grid / np.maximum(supply_grid, 1.0)
   return {
       "valid": True,
       "stage": 2,
@@ -1223,6 +1241,8 @@ def evaluate_floorplan_ppa(
       "min_channel_um": meta["min_channel_um"],
       "corners": corners_out,
       "cluster_centroids": cluster_coords,
+      "boxes": boxes,
+      "utilization_grid": np.round(util_grid, 3).tolist(),
       "openroad_binary": openroad_info,
   }
 

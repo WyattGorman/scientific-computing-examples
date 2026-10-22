@@ -26,7 +26,7 @@ sys.path.append("/app/src")
 
 from alpha_evolve import AlphaEvolveController, get_score  # pylint: disable=g-import-not-at-top
 from alpha_evolve.models import parse_models_from_env  # pylint: disable=g-import-not-at-top
-from evaluator import METRIC_NAME, evaluate  # pylint: disable=g-import-not-at-top
+from evaluator import METRIC_NAME, evaluate, postprocess  # pylint: disable=g-import-not-at-top
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ def main() -> None:
           "scores": {
               "scores": [{
                   "metric": METRIC_NAME,
-                  "score": -25.7366,
+                  "score": -22.3044,
               }]
           }
       },
@@ -128,6 +128,7 @@ def main() -> None:
           prog.get("name", "Unknown"),
           score,
       )
+    postprocess(top_programs)
 
 
 if __name__ == "__main__":

@@ -33,7 +33,7 @@ problem_description: |
      `< 42.0 um` of the core boundary (`PIN_BLOCKED_BY_BOUNDARY`).
 program_language: "python"
 primary_metric: "ppa_composite_score"
-initial_score: -55.7647
+initial_score: -130.2869
 
 seed_files:
   - "main.py"
@@ -41,3 +41,4 @@ seed_files:
 evaluator:
   script: "evaluator.py"
   method: "evaluate"
+  postprocess_method: "postprocess"
