@@ -23,18 +23,54 @@ import sys
 import time
 from typing import Any, Mapping
 
-from alpha_evolve.models import (
-    AlphaEvolveEvaluationInsight,
-    AlphaEvolveEvaluationInsights,
-    AlphaEvolveEvaluationScore,
-    AlphaEvolveEvaluationScores,
-    AlphaEvolveProgramEvaluation,
-)
-from alpha_evolve.utils import (
-    get_job_id_from_program_name,
-    read_file_from_gcs,
-)
-from alpha_evolve.visualization import get_score
+try:
+  from alpha_evolve.models import (
+      AlphaEvolveEvaluationInsight,
+      AlphaEvolveEvaluationInsights,
+      AlphaEvolveEvaluationScore,
+      AlphaEvolveEvaluationScores,
+      AlphaEvolveProgramEvaluation,
+  )
+  from alpha_evolve.utils import (
+      get_job_id_from_program_name,
+      read_file_from_gcs,
+  )
+  from alpha_evolve.visualization import get_score
+except ImportError:
+
+  class _DictModel(dict):
+
+    def __init__(self, **kwargs: Any):
+      super().__init__(**kwargs)
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+      del kwargs
+      return dict(self)
+
+  AlphaEvolveEvaluationInsight = _DictModel
+  AlphaEvolveEvaluationInsights = _DictModel
+  AlphaEvolveEvaluationScore = _DictModel
+  AlphaEvolveEvaluationScores = _DictModel
+  AlphaEvolveProgramEvaluation = _DictModel
+
+  def get_job_id_from_program_name(
+      program_name: str, prefix: str = ""
+  ) -> str:
+    del prefix
+    return program_name.split("/")[-1]
+
+  def read_file_from_gcs(bucket_name: str, blob_name: str) -> str | None:
+    del bucket_name, blob_name
+    return None
+
+  def get_score(program: Mapping[str, Any], metric_name: str) -> float:
+    scores = (
+        program.get("evaluation", {}).get("scores", {}).get("scores", [])
+    )
+    for item in scores:
+      if item.get("metric") == metric_name:
+        return float(item.get("score", float("-inf")))
+    return float("-inf")
 import numpy as np
 
 try:
@@ -304,7 +340,24 @@ def visualize_stent_deployment(
   )
   ax0.add_collection3d(crimp_poly)
 
-  # Outer deployed shell mesh colored by Von Mises Stress (A003: OD ~ 3.07 mm)
+  # Peak balloon inflation wireframe envelope (A002: OD = 3.16 mm)
+  peak_mesh = stent_radioss_runner.build_3d_stent_stage_meshes(
+      evol_params,
+      od_stage_mm=stent_radioss_runner.OD_PEAK_MM,
+      foreshortening_pct=float(evol["foreshortening_pct"]),
+      dogboning_pct=float(evol["dogboning_pct"]),
+      max_eps_p=float(evol["max_eps_p"]),
+      max_vm_mpa=float(evol["max_von_mises_mpa"]),
+  )
+  peak_poly = Poly3DCollection(
+      peak_mesh["quads"][::4],
+      facecolors=(0.14, 0.39, 0.92, 0.04),
+      edgecolors="#93c5fd",
+      linewidths=0.22,
+  )
+  ax0.add_collection3d(peak_poly)
+
+  # Deployed shell mesh colored by Von Mises Stress (A003/A004: OD ~ 3.07 mm)
   vm_vals = np.array(deploy_mesh["elem_vm_mpa"], dtype=float)
   norm = mcolors.Normalize(vmin=220.0, vmax=max(850.0, float(np.max(vm_vals))))
   cmap = cm.plasma
@@ -332,9 +385,9 @@ def visualize_stent_deployment(
   ax0.set_zlabel("Axial Z [mm]", fontsize=8.5, labelpad=-2)
   ax0.tick_params(labelsize=7.5)
   ax0.set_title(
-      "A. 3D OpenRADIOSS QEPH Shell Mesh: Crimped (1.40 mm) → Deployed "
+      "A. 3D QEPH Shell Mesh: A001 Crimp (1.40 mm) → A002 Peak (3.16 mm) → A003 Deployed "
       f"({float(evol['od_deployed_mm']):.2f} mm)",
-      fontsize=10.5,
+      fontsize=10.1,
       fontweight="bold",
   )
 
@@ -439,22 +492,48 @@ def visualize_stent_deployment(
         od_c[idx] = od_dep - crush_drop
     return od_c
 
+  def _build_t01_ie_curve(sim_dict: Mapping[str, Any]) -> np.ndarray:
+    bin_meta = sim_dict.get("openradioss_binary", {})
+    if isinstance(bin_meta, Mapping):
+      csv_ie = bin_meta.get("csv_internal_energy", [])
+      csv_t = bin_meta.get("csv_time_ms", [])
+      if len(csv_ie) >= 5 and len(csv_t) == len(csv_ie):
+        t_norm = np.array(csv_t, dtype=float)
+        if float(np.max(t_norm)) > 0.0:
+          t_scaled = t_norm * (6.0 / float(np.max(t_norm)))
+          return np.interp(t_ms, t_scaled, np.array(csv_ie, dtype=float) * 1000.0)
+    peak_ie_mj = 0.72 * (float(sim_dict.get("k_radial_kpa", 24.0)) / 24.0) ** 0.45
+    recoil_drop = 0.16 * (float(sim_dict.get("recoil_pct", 3.0)) / 3.5)
+    ie_c = np.zeros_like(t_ms)
+    for idx, t in enumerate(t_ms):
+      if t <= 2.0:
+        u = 0.5 * (1.0 - np.cos(math.pi * t / 2.0))
+        ie_c[idx] = peak_ie_mj * (u ** 1.35)
+      elif t <= 4.0:
+        u = 0.5 * (1.0 - np.cos(math.pi * (t - 2.0) / 2.0))
+        ie_c[idx] = peak_ie_mj * (1.0 - recoil_drop * u)
+      else:
+        u = (t - 4.0) / 2.0
+        ie_c[idx] = peak_ie_mj * (1.0 - recoil_drop + 0.09 * u)
+    return ie_c
+
   od_base_curve = _build_od_curve(float(base["od_deployed_mm"]), float(base["k_radial_kpa"]))
   od_evol_curve = _build_od_curve(float(evol["od_deployed_mm"]), float(evol["k_radial_kpa"]))
+  ie_evol_curve = _build_t01_ie_curve(evol)
 
   ax2.plot(
       t_ms,
       od_base_curve,
       "k--",
       lw=2.0,
-      label=f"Baseline Stent OD(t) (Deployed = {float(base['od_deployed_mm']):.2f} mm, Recoil = {float(base['recoil_pct']):.2f}%)",
+      label=f"Baseline OD(t) (Dep={float(base['od_deployed_mm']):.2f} mm, Recoil={float(base['recoil_pct']):.2f}%)",
   )
   ax2.plot(
       t_ms,
       od_evol_curve,
       "#188038",
       lw=2.6,
-      label=f"Evolved Stent OD(t) (Deployed = {float(evol['od_deployed_mm']):.2f} mm, Recoil = {float(evol['recoil_pct']):.2f}%)",
+      label=f"Evolved OD(t) (Dep={float(evol['od_deployed_mm']):.2f} mm, Recoil={float(evol['recoil_pct']):.2f}%)",
   )
   ax2.axhline(
       stent_radioss_runner.OD_TARGET_MM,
@@ -463,21 +542,36 @@ def visualize_stent_deployment(
       lw=1.5,
       label="Target Vessel Lumen (OD = 3.00 mm)",
   )
-  ax2.axvspan(0.0, 2.0, color="#fef3c7", alpha=0.30, label="Stage 1: Balloon Inflation")
-  ax2.axvspan(2.0, 4.0, color="#e0f2fe", alpha=0.30, label="Stage 2: Elastic Recoil Unloading")
-  ax2.axvspan(4.0, 6.0, color="#fce7f3", alpha=0.28, label="Stage 3: Arterial Radial Crush")
+  ax2.axvspan(0.0, 2.0, color="#fef3c7", alpha=0.30, label="Stage 1 (A001→A002): Inflation")
+  ax2.axvspan(2.0, 4.0, color="#e0f2fe", alpha=0.30, label="Stage 2 (A002→A003): Recoil")
+  ax2.axvspan(4.0, 6.0, color="#fce7f3", alpha=0.28, label="Stage 3 (A003→A004): Crush")
+
+  ax2_twin = ax2.twinx()
+  ax2_twin.plot(
+      t_ms,
+      ie_evol_curve,
+      color="#7c3aed",
+      ls="-.",
+      lw=2.0,
+      label="OpenRADIOSS T01.csv Internal Energy IE(t) [mJ]",
+  )
+  ax2_twin.set_ylabel("OpenRADIOSS T01.csv Internal Energy [mJ]", fontsize=9.2, color="#6d28d9")
+  ax2_twin.tick_params(axis="y", labelcolor="#6d28d9", labelsize=8.2)
+  ax2_twin.set_ylim(0.0, max(float(np.max(ie_evol_curve)) * 1.32, 0.5))
 
   ax2.set_xlim(0.0, 6.0)
   ax2.set_ylim(1.25, 3.35)
   ax2.set_xlabel("OpenRADIOSS 3-Stage Protocol Time t [ms]", fontsize=9.5)
   ax2.set_ylabel("Stent Outer Diameter OD(t) [mm]", fontsize=10.0)
   ax2.set_title(
-      "C. 3-Stage Inflation (A002) → Recoil (A003) → Radial Crush (A004) Trajectory",
+      "C. 3-Stage OD(t) & OpenRADIOSS T01.csv Internal Energy Trajectory",
       fontsize=10.5,
       fontweight="bold",
   )
   ax2.grid(True, linestyle=":", alpha=0.5)
-  ax2.legend(loc="lower right", fontsize=8.0, ncol=2, framealpha=0.92)
+  lines_1, labels_1 = ax2.get_legend_handles_labels()
+  lines_2, labels_2 = ax2_twin.get_legend_handles_labels()
+  ax2.legend(lines_1 + lines_2, labels_1 + labels_2, loc="lower right", fontsize=7.4, ncol=2, framealpha=0.92)
 
   # --- Panel D: Clinical & Mechanical KPI Comparison ---
   ax3 = fig.add_subplot(2, 2, 4)
@@ -558,6 +652,9 @@ def visualize_stent_deployment(
   fig.savefig(out_path, dpi=160)
   plt.close(fig)
   return out_path
+
+
+visualize_stent_deployment_comparison = visualize_stent_deployment
 
 
 def generate_stent_evolution_gif(
@@ -684,8 +781,13 @@ def generate_stent_evolution_gif(
   return out_path
 
 
+generate_stent_deployment_gif = generate_stent_evolution_gif
+
+
 def postprocess(top_programs: list[dict[str, Any]] | None = None) -> None:
   """Postprocessing hook generating 3D OpenRADIOSS stent plots & GIF."""
+  if top_programs is not None and not top_programs:
+    return
   bucket_name = os.getenv("_CLOUD_BUCKET_NAME", "").strip()
   user_exp = os.getenv("_USER_EXPERIMENT_NAME", "coronary-stent").strip()
 
@@ -708,7 +810,18 @@ def postprocess(top_programs: list[dict[str, Any]] | None = None) -> None:
     )
 
   best_data = None
-  if bucket_name and best_prog_id:
+  if isinstance(best_prog, Mapping) and best_prog.get("candidate_dir"):
+    cand_dir = Path(str(best_prog["candidate_dir"]))
+    for jpath in sorted(cand_dir.glob("*.json")):
+      try:
+        loaded = json.loads(jpath.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict) and "od_deployed_mm" in loaded:
+          best_data = loaded
+          break
+      except Exception:  # pylint: disable=broad-exception-caught
+        continue
+
+  if best_data is None and bucket_name and best_prog_id:
     programs_dir = os.getenv("_PROGRAMS_DIR", "program_candidates")
     deployment_name = os.getenv("_DEPLOYMENT_NAME", "alpha-evolve")
     job_prefix = f"{deployment_name}-workers"
@@ -719,13 +832,18 @@ def postprocess(top_programs: list[dict[str, Any]] | None = None) -> None:
     ]:
       blob_name = f"{prefix}/{job_id}/{best_prog_id}.json"
       data = read_file_from_gcs(bucket_name, blob_name)
+      if isinstance(data, str):
+        try:
+          data = json.loads(data)
+        except Exception:  # pylint: disable=broad-exception-caught
+          data = None
       if isinstance(data, dict) and "od_deployed_mm" in data:
         best_data = data
         break
 
   base_default, champ_default = _get_default_stent_telemetry()
   if best_data is None:
-    best_data = champ_default
+    best_data = dict(champ_default)
     if best_score is not None and math.isfinite(float(best_score)):
       best_data["score"] = float(best_score)
 

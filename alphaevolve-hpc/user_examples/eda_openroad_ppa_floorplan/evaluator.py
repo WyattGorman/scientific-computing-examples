@@ -14,6 +14,8 @@
 """Two-stage OpenROAD floorplan & multi-corner STA PPA evaluator."""
 
 import json
+import logging
+import math
 import os
 from pathlib import Path
 import sys
@@ -21,13 +23,71 @@ import time
 from typing import Any, Mapping
 import numpy as np
 
-from alpha_evolve.models import (
-    AlphaEvolveEvaluationInsight,
-    AlphaEvolveEvaluationInsights,
-    AlphaEvolveEvaluationScore,
-    AlphaEvolveEvaluationScores,
-    AlphaEvolveProgramEvaluation,
-)
+try:
+  from alpha_evolve.models import (
+      AlphaEvolveEvaluationInsight,
+      AlphaEvolveEvaluationInsights,
+      AlphaEvolveEvaluationScore,
+      AlphaEvolveEvaluationScores,
+      AlphaEvolveProgramEvaluation,
+  )
+  from alpha_evolve.utils import (
+      get_job_id_from_program_name,
+      read_file_from_gcs,
+  )
+  from alpha_evolve.visualization import get_score
+except ImportError:
+
+  class _DictModel(dict):
+
+    def __init__(self, **kwargs: Any):
+      super().__init__(**kwargs)
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+      del kwargs
+      return dict(self)
+
+  AlphaEvolveEvaluationInsight = _DictModel
+  AlphaEvolveEvaluationInsights = _DictModel
+  AlphaEvolveEvaluationScore = _DictModel
+  AlphaEvolveEvaluationScores = _DictModel
+  AlphaEvolveProgramEvaluation = _DictModel
+
+  def get_job_id_from_program_name(
+      program_name: str, prefix: str = ""
+  ) -> str:
+    del prefix
+    return program_name.split("/")[-1]
+
+  def read_file_from_gcs(bucket_name: str, blob_name: str) -> str | None:
+    del bucket_name, blob_name
+    return None
+
+  def get_score(program: Mapping[str, Any], metric_name: str) -> float:
+    scores = (
+        program.get("evaluation", {}).get("scores", {}).get("scores", [])
+    )
+    for item in scores:
+      if item.get("metric") == metric_name:
+        return float(item.get("score", float("-inf")))
+    return float("-inf")
+
+
+try:
+  from alpha_evolve.utils import upload_to_gcs
+except ImportError:
+
+  def upload_to_gcs(local_path: Path, bucket_name: str, blob_name: str) -> None:
+    """Uploads a local file to a GCS bucket."""
+    from google.cloud import storage  # pylint: disable=g-import-not-at-top
+
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    blob.upload_from_filename(str(local_path))
+
+
+logger = logging.getLogger(__name__)
 
 SAMPLE_DIR = Path(__file__).absolute().parent
 if str(SAMPLE_DIR) in sys.path:
@@ -179,32 +239,37 @@ def evaluate(eval_inputs: Mapping[str, Any] | None = None) -> dict[str, Any]:
   candidate_dir = os.environ.get("_CANDIDATE_DIR")
   if candidate_dir:
     try:
-      out_file = Path(candidate_dir) / "floorplan_ppa_metrics.json"
-      out_file.write_text(
-          json.dumps(
-              {
-                  "ppa_composite_score": ppa_score,
-                  "floorplan": dict(floorplan),
-                  "worst_wns_ps": wns_ps,
-                  "total_tns_ps": tns_ps,
-                  "weighted_hpwl_mm": hpwl_mm,
-                  "total_power_mw": power_mw,
-                  "routing_overflow": overflow,
-                  "max_gcell_utilization": max_util,
-                  "cts_skew_base_ps": cts_skew,
-                  "spine_blockage_penalty_ps": res["spine_blockage_penalty_ps"],
-                  "min_channel_um": res["min_channel_um"],
-                  "corners": res["corners"],
-                  "cluster_centroids": {
-                      k: list(v) for k, v in res["cluster_centroids"].items()
-                  },
-                  "boxes": res.get("boxes", []),
-                  "utilization_grid": res.get("utilization_grid", []),
-                  "openroad_binary_status": or_status,
+      program_name = os.environ.get("_CANDIDATE_PROGRAM_ID", "local_eval_run")
+      payload = json.dumps(
+          {
+              "program_name": program_name,
+              "score": ppa_score,
+              "ppa_composite_score": ppa_score,
+              "floorplan": dict(floorplan),
+              "worst_wns_ps": wns_ps,
+              "total_tns_ps": tns_ps,
+              "weighted_hpwl_mm": hpwl_mm,
+              "total_power_mw": power_mw,
+              "routing_overflow": overflow,
+              "max_gcell_utilization": max_util,
+              "cts_skew_base_ps": cts_skew,
+              "spine_blockage_penalty_ps": res["spine_blockage_penalty_ps"],
+              "min_channel_um": res["min_channel_um"],
+              "corners": res["corners"],
+              "cluster_centroids": {
+                  k: list(v) for k, v in res["cluster_centroids"].items()
               },
-              indent=2,
-          ),
-          encoding="utf-8",
+              "boxes": res.get("boxes", []),
+              "utilization_grid": res.get("utilization_grid", []),
+              "openroad_binary_status": or_status,
+          },
+          indent=2,
+      )
+      (Path(candidate_dir) / f"{program_name}.json").write_text(
+          payload, encoding="utf-8"
+      )
+      (Path(candidate_dir) / "floorplan_ppa_metrics.json").write_text(
+          payload, encoding="utf-8"
       )
     except OSError:
       pass
@@ -229,8 +294,9 @@ def _draw_die_floorplan(
     ppa_res: Mapping[str, Any],
     title: str,
     score: float,
+    vmax_util: float = 1.15,
 ) -> None:
-  """Renders 2D die floorplan, macros, active pin edges, clusters, and flylines."""
+  """Renders 2D die floorplan overlaid on 24x24 GCell congestion, macros, pins, and clusters."""
   from matplotlib.patches import Circle, FancyArrowPatch, Rectangle  # pylint: disable=g-import-not-at-top
 
   dx0, dy0, dx1, dy1 = netlist.get("die_bbox_um", [0.0, 0.0, 1200.0, 1200.0])
@@ -245,6 +311,7 @@ def _draw_die_floorplan(
           facecolor="#F8FAFC",
           edgecolor="#334155",
           linewidth=1.5,
+          zorder=0,
       )
   )
   ax.add_patch(
@@ -256,8 +323,24 @@ def _draw_die_floorplan(
           edgecolor="#64748B",
           linestyle="--",
           linewidth=1.1,
+          zorder=1,
       )
   )
+
+  # Overlay 24x24 FastRoute GCell congestion heatmap directly on the core layout
+  util_grid = np.asarray(ppa_res.get("utilization_grid", np.zeros((24, 24))), dtype=np.float64)
+  if util_grid.ndim == 2 and util_grid.size > 0:
+    ax.imshow(
+        util_grid,
+        origin="lower",
+        extent=[cx0, cx1, cy0, cy1],
+        cmap="YlOrRd",
+        vmin=0.0,
+        vmax=vmax_util,
+        alpha=0.24,
+        aspect="equal",
+        zorder=1,
+    )
 
   # Central TritonCTS H-tree clock spine corridor [380, 820] x [150, 1050]
   ax.add_patch(
@@ -269,18 +352,20 @@ def _draw_die_floorplan(
           edgecolor="#D97706",
           linestyle=":",
           linewidth=1.1,
-          alpha=0.38,
+          alpha=0.28,
+          zorder=1,
       )
   )
   ax.text(
       600.0,
-      1072.0,
+      1075.0,
       "TritonCTS Central Clock Spine Corridor",
       ha="center",
       va="bottom",
-      fontsize=7.2,
+      fontsize=7.0,
       color="#92400E",
       fontweight="bold",
+      zorder=6,
   )
 
   boxes = ppa_res.get("boxes", [])
@@ -315,7 +400,6 @@ def _draw_die_floorplan(
     orient = str(b["orient"])
     pin_side = str(b["pin_side"])
 
-    # Halo keep-out rectangle
     ax.add_patch(
         Rectangle(
             (x0 - hx, y0 - hy),
@@ -345,7 +429,6 @@ def _draw_die_floorplan(
         )
     )
 
-    # Highlight active M4 signal pin edge
     if pin_side == "E":
       ax.plot([x0 + w, x0 + w], [y0, y0 + h], color="#DC2626", linewidth=3.0, zorder=5)
       arr_dx = 26.0
@@ -376,59 +459,103 @@ def _draw_die_floorplan(
         f"{short_id}\n[{orient} | pin:{pin_side}]",
         ha="center",
         va="center",
-        fontsize=6.5,
+        fontsize=6.2,
         fontweight="bold",
         color="#0F172A",
         zorder=6,
     )
 
-  # Draw standard-cell functional clusters (RePlAce centroids)
-  for c in netlist["stdcell_clusters"]:
+  # Draw standard-cell functional clusters (RePlAce centroids) with macro & peer collision avoidance
+  placed_cl_labels: list[tuple[float, float]] = []
+  for idx_c, c in enumerate(netlist["stdcell_clusters"]):
     cid = c["id"]
     if cid not in cluster_coords:
       continue
-    cx, cy = cluster_coords[cid]
-    rad = max(24.0, min(48.0, (float(c["area_um2"]) ** 0.5) * 0.25))
+    cx, cy = float(cluster_coords[cid][0]), float(cluster_coords[cid][1])
+    rad = max(22.0, min(42.0, (float(c["area_um2"]) ** 0.5) * 0.22))
     ax.add_patch(
         Circle(
             (cx, cy),
             radius=rad,
             facecolor="#DCFCE7",
             edgecolor="#15803D",
-            linewidth=1.3,
-            alpha=0.88,
+            linewidth=1.2,
+            alpha=0.86,
             zorder=5,
         )
     )
     short_cl = cid.replace("CL_", "")
+    lbl_x, lbl_y = cx, cy
+    for _ in range(12):
+      moved = False
+      for b in boxes:
+        bx0, by0 = float(b["x0"]), float(b["y0"])
+        bx1, by1 = bx0 + float(b["w"]), by0 + float(b["h"])
+        if (bx0 - 88.0) <= lbl_x <= (bx1 + 88.0) and (by0 - 28.0) <= lbl_y <= (by1 + 28.0):
+          if bx0 >= 850.0:
+            lbl_x = bx0 - 96.0
+          elif bx0 <= 100.0:
+            lbl_x = bx1 + 96.0
+          elif bx0 > 450.0:
+            lbl_x = bx0 - 96.0 if cx <= 0.5 * (bx0 + bx1) else bx1 + 96.0
+          else:
+            lbl_y = by1 + 34.0 if cy >= 0.5 * (by0 + by1) else by0 - 34.0
+          moved = True
+      for px_prev, py_prev in placed_cl_labels:
+        if abs(lbl_x - px_prev) < 145.0 and abs(lbl_y - py_prev) < 40.0:
+          lbl_y += 44.0 if (lbl_y >= py_prev or idx_c % 2 == 0) else -44.0
+          moved = True
+      lbl_x = max(95.0, min(1105.0, lbl_x))
+      lbl_y = max(65.0, min(1135.0, lbl_y))
+      if not moved:
+        break
+    placed_cl_labels.append((lbl_x, lbl_y))
     ax.text(
-        cx,
-        cy,
+        lbl_x,
+        lbl_y,
         short_cl,
         ha="center",
         va="center",
-        fontsize=6.0,
+        fontsize=5.6,
         fontweight="bold",
         color="#14532D",
-        zorder=6,
-    )
-
-  # Draw peripheral IO pads
-  for io_id, pad in io_pads.items():
-    px, py = float(pad["x_um"]), float(pad["y_um"])
-    ax.scatter([px], [py], s=48, marker="s", color="#D97706", edgecolor="#0F172A", zorder=7)
-    ax.text(
-        px,
-        py + (22.0 if py < 600 else -26.0),
-        io_id.replace("IO_", ""),
-        ha="center",
-        va="center",
-        fontsize=6.3,
-        fontweight="bold",
-        color="#78350F",
-        bbox=dict(boxstyle="round,pad=0.15", facecolor="#FEF3C7", edgecolor="none", alpha=0.85),
+        bbox=dict(
+            boxstyle="round,pad=0.12",
+            facecolor="#F0FDF4",
+            edgecolor="#15803D",
+            linewidth=0.5,
+            alpha=0.90,
+        ),
         zorder=7,
     )
+
+  # Draw peripheral IO pads with channel-placed labels so they never overlap West/East macros
+  has_west_perim = any(float(b["x0"]) < 100.0 for b in boxes)
+  for io_id, pad in io_pads.items():
+    px, py = float(pad["x_um"]), float(pad["y_um"])
+    ax.scatter([px], [py], s=44, marker="s", color="#D97706", edgecolor="#0F172A", zorder=7)
+    short_io = io_id.replace("IO_", "")
+    if px <= 25.0:
+      tx, ty, ha_val = px + 14.0, (476.0 if has_west_perim else 565.0), "left"
+    elif px >= 1175.0:
+      tx, ty, ha_val = px - 14.0, 508.0, "right"
+    elif py <= 25.0:
+      tx, ty, ha_val = px, py + 22.0, "center"
+    else:
+      tx, ty, ha_val = px, py - 24.0, "center"
+    ax.text(
+        tx,
+        ty,
+        short_io,
+        ha=ha_val,
+        va="center",
+        fontsize=5.8,
+        fontweight="bold",
+        color="#78350F",
+        bbox=dict(boxstyle="round,pad=0.12", facecolor="#FEF3C7", edgecolor="#D97706", linewidth=0.4, alpha=0.92),
+        zorder=8,
+    )
+
 
   ax.set_xlim(-20.0, 1220.0)
   ax.set_ylim(-20.0, 1220.0)
@@ -439,7 +566,7 @@ def _draw_die_floorplan(
       f"{title}\n"
       f"PPA Score={score:+.2f} | WNS={ppa_res['worst_wns_ps']:+.1f} ps | "
       f"HPWL={ppa_res['weighted_hpwl_mm']:.0f} mm | Spine Pen={ppa_res['spine_blockage_penalty_ps']:.1f} ps",
-      fontsize=9.2,
+      fontsize=9.1,
       fontweight="bold",
   )
 
@@ -450,7 +577,7 @@ def visualize_floorplan_ppa_comparison(
     output_path: str | Path | None = None,
     netlist: Mapping[str, Any] | None = None,
 ) -> Path:
-  """Generates a 4-panel OpenROAD floorplan, congestion & multi-corner STA plot."""
+  """Generates a 4-panel OpenROAD floorplan, congestion, STA slack & wirelength/power plot."""
   import matplotlib  # pylint: disable=g-import-not-at-top
   matplotlib.use("Agg")
   import matplotlib.pyplot as plt  # pylint: disable=g-import-not-at-top
@@ -475,7 +602,11 @@ def visualize_floorplan_ppa_comparison(
   base_score = score_floorplan_ppa(base_res)
   champ_score = score_floorplan_ppa(champ_res)
 
-  fig = plt.figure(figsize=(16.5, 13.0), dpi=160)
+  base_grid = np.asarray(base_res.get("utilization_grid", np.zeros((24, 24))), dtype=np.float64)
+  champ_grid = np.asarray(champ_res.get("utilization_grid", np.zeros((24, 24))), dtype=np.float64)
+  vmax_util = max(1.15, float(np.max(base_grid)), float(np.max(champ_grid)))
+
+  fig = plt.figure(figsize=(17.0, 13.0), dpi=160)
   fig.patch.set_facecolor("#F8FAFC")
   outer_gs = fig.add_gridspec(
       2, 2, hspace=0.28, wspace=0.22, left=0.05, right=0.97, top=0.91, bottom=0.06
@@ -490,7 +621,7 @@ def visualize_floorplan_ppa_comparison(
       y=0.97,
   )
 
-  # Panel (A): Baseline 2D Die Floorplan
+  # Panel (A): Baseline 2D Die Floorplan overlaid on 24x24 FastRoute GCell heatmap
   ax_a = fig.add_subplot(outer_gs[0, 0])
   _draw_die_floorplan(
       ax_a,
@@ -498,9 +629,10 @@ def visualize_floorplan_ppa_comparison(
       base_res,
       "(A) Baseline 2-Column Macro Grid (Obstructs Core & Clock Spine)",
       base_score,
+      vmax_util=vmax_util,
   )
 
-  # Panel (B): Champion Perimeter-Banked 2D Die Floorplan
+  # Panel (B): Champion Perimeter-Banked 2D Die Floorplan overlaid on 24x24 FastRoute GCell heatmap
   ax_b = fig.add_subplot(outer_gs[0, 1])
   _draw_die_floorplan(
       ax_b,
@@ -508,6 +640,7 @@ def visualize_floorplan_ppa_comparison(
       champ_res,
       "(B) Champion Evolved Perimeter-Banked Floorplan (West R0 / East MY)",
       champ_score,
+      vmax_util=vmax_util,
   )
 
   # Panel (C): Dual 24x24 GCell FastRoute RUDY Congestion Heatmaps (Baseline vs Champion)
@@ -515,11 +648,7 @@ def visualize_floorplan_ppa_comparison(
   ax_c1 = fig.add_subplot(gs_c[0, 0])
   ax_c2 = fig.add_subplot(gs_c[0, 1])
 
-  base_grid = np.asarray(base_res.get("utilization_grid", np.zeros((24, 24))), dtype=np.float64)
-  champ_grid = np.asarray(champ_res.get("utilization_grid", np.zeros((24, 24))), dtype=np.float64)
   cx0, cy0, cx1, cy1 = netlist["core_bbox_um"]
-  vmax_util = max(1.15, float(np.max(base_grid)), float(np.max(champ_grid)))
-
   for sub_ax, grid, res_d, subtitle in [
       (
           ax_c1,
@@ -565,14 +694,18 @@ def visualize_floorplan_ppa_comparison(
   cbar = fig.colorbar(im, ax=[ax_c1, ax_c2], fraction=0.042, pad=0.03)
   cbar.set_label("GCell Routing Demand / Supply", fontsize=8.0)
 
-  # Panel (D): Multi-Corner OpenSTA Timing Slacks & PPA Signoff Comparison
-  ax_d = fig.add_subplot(outer_gs[1, 1])
+  # Panel (D): Split into (D1) 3-Corner OpenSTA Timing Slacks and (D2) Wirelength & Switching Power Comparison
+  gs_d = outer_gs[1, 1].subgridspec(1, 2, wspace=0.28)
+  ax_d1 = fig.add_subplot(gs_d[0, 0])
+  ax_d2 = fig.add_subplot(gs_d[0, 1])
+
   ss_base_paths = base_res["corners"]["ss_0p63v_100c"]["path_slacks_ps"]
   ss_champ_paths = champ_res["corners"]["ss_0p63v_100c"]["path_slacks_ps"]
   path_names = list(ss_base_paths.keys())
-  short_paths = [p.replace("P", "P").split("_")[0] + ":" + "_".join(p.split("_")[1:3]) for p in path_names]
+  short_paths = [
+      f"P{i}:" + "_".join(p.split("_")[1:3]) for i, p in enumerate(path_names)
+  ]
 
-  # Combine 6 critical paths (at SS corner) + 3 PVT corner WNS bars
   labels = short_paths + ["WNS (SS)", "WNS (TT)", "WNS (FF)"]
   base_vals = [float(ss_base_paths[k]) for k in path_names] + [
       float(base_res["corners"]["ss_0p63v_100c"]["wns_ps"]),
@@ -587,62 +720,92 @@ def visualize_floorplan_ppa_comparison(
 
   y_pos = np.arange(len(labels))
   bar_h = 0.36
-  ax_d.barh(
+  ax_d1.barh(
       y_pos - bar_h / 2,
       base_vals,
       height=bar_h,
       color="#DC2626",
       alpha=0.85,
-      label=f"Baseline (Worst WNS={base_res['worst_wns_ps']:+.1f} ps, TNS={base_res['total_tns_ps']:.1f} ps)",
+      label=f"Baseline (WNS={base_res['worst_wns_ps']:+.1f} ps)",
   )
-  ax_d.barh(
+  ax_d1.barh(
       y_pos + bar_h / 2,
       champ_vals,
       height=bar_h,
       color="#059669",
       alpha=0.88,
-      label=f"Champion (Worst WNS={champ_res['worst_wns_ps']:+.1f} ps, TNS={champ_res['total_tns_ps']:.1f} ps)",
+      label=f"Champion (WNS={champ_res['worst_wns_ps']:+.1f} ps)",
   )
-  ax_d.axvline(0.0, color="#0F172A", linewidth=1.3, linestyle="--", label="Setup Signoff Target (0.0 ps)")
-  ax_d.axhline(len(short_paths) - 0.5, color="#94A3B8", linewidth=0.9, linestyle=":")
-  ax_d.set_yticks(y_pos)
-  ax_d.set_yticklabels(labels, fontsize=7.8, fontweight="bold")
-  ax_d.set_xlim(-175.0, 185.0)
-  ax_d.set_xlabel("Setup Timing Slack (ps) at 500 ps (2.0 GHz) Clock", fontsize=8.5)
-  ax_d.set_title(
-      "(D) 3-Corner OpenSTA Setup Timing Closure & PPA Signoff Summary",
-      fontsize=9.5,
-      fontweight="bold",
-  )
-  ax_d.grid(True, axis="x", linestyle=":", alpha=0.5)
-  ax_d.legend(loc="lower right", fontsize=7.4, framealpha=0.92)
+  ax_d1.axvline(0.0, color="#0F172A", linewidth=1.2, linestyle="--")
+  ax_d1.axhline(len(short_paths) - 0.5, color="#94A3B8", linewidth=0.9, linestyle=":")
+  ax_d1.set_yticks(y_pos)
+  ax_d1.set_yticklabels(labels, fontsize=7.2, fontweight="bold")
+  ax_d1.set_xlim(-175.0, 185.0)
+  ax_d1.set_xlabel("Setup Slack [ps] (500 ps Clock)", fontsize=8.0)
+  ax_d1.set_title("(D1) 3-Corner OpenSTA Setup Slack", fontsize=8.8, fontweight="bold")
+  ax_d1.grid(True, axis="x", linestyle=":", alpha=0.5)
+  ax_d1.legend(loc="lower right", fontsize=6.8, framealpha=0.92)
 
-  summary_box = (
-      f"PPA Signoff Summary (7nm ASAP7)\n"
-      f"---------------------------------------\n"
-      f"Metric          Baseline    Champion\n"
-      f"PPA Score:     {base_score:+8.2f}    {champ_score:+8.2f}\n"
-      f"Worst WNS(ps): {base_res['worst_wns_ps']:+8.1f}    {champ_res['worst_wns_ps']:+8.1f}\n"
-      f"Total TNS(ps): {base_res['total_tns_ps']:+8.1f}    {champ_res['total_tns_ps']:+8.1f}\n"
-      f"HPWL (mm):     {base_res['weighted_hpwl_mm']:8.1f}    {champ_res['weighted_hpwl_mm']:8.1f}\n"
-      f"Power (mW):    {base_res['total_power_mw']:8.2f}    {champ_res['total_power_mw']:8.2f}\n"
-      f"CTS Skew(ps):  {base_res['cts_skew_base_ps']:8.1f}    {champ_res['cts_skew_base_ps']:8.1f}"
+  # (D2) OpenROAD Wirelength, Switching/Total Power & Clock Skew Comparison
+  ppa_cats = [
+      "HPWL\n[÷15 mm]",
+      "Total Power\n[mW]",
+      "CTS Skew\n[ps]",
+      "Peak GCell\nUtil [×100%]",
+  ]
+  p_idx = np.arange(len(ppa_cats))
+  base_ppa_bars = [
+      float(base_res["weighted_hpwl_mm"]) / 15.0,
+      float(base_res["total_power_mw"]),
+      float(base_res["cts_skew_base_ps"]),
+      float(base_res["max_gcell_utilization"]) * 100.0,
+  ]
+  champ_ppa_bars = [
+      float(champ_res["weighted_hpwl_mm"]) / 15.0,
+      float(champ_res["total_power_mw"]),
+      float(champ_res["cts_skew_base_ps"]),
+      float(champ_res["max_gcell_utilization"]) * 100.0,
+  ]
+  ax_d2.bar(
+      p_idx - 0.17,
+      base_ppa_bars,
+      width=0.34,
+      color="#94A3B8",
+      edgecolor="#334155",
+      label=f"Baseline (Score={base_score:+.1f})",
   )
-  ax_d.text(
-      0.015,
-      0.34,
-      summary_box,
-      transform=ax_d.transAxes,
-      fontsize=6.9,
-      fontfamily="monospace",
-      va="center",
-      bbox=dict(
-          boxstyle="round,pad=0.35",
-          facecolor="#F8FAFC",
-          edgecolor="#64748B",
-          alpha=0.95,
-      ),
+  ebars = ax_d2.bar(
+      p_idx + 0.17,
+      champ_ppa_bars,
+      width=0.34,
+      color="#2563EB",
+      edgecolor="#0F172A",
+      label=f"Champion (Score={champ_score:+.1f})",
   )
+  champ_annots = [
+      f"{float(champ_res['weighted_hpwl_mm']):.0f}mm",
+      f"{float(champ_res['total_power_mw']):.1f}mW",
+      f"{float(champ_res['cts_skew_base_ps']):.1f}ps",
+      f"{float(champ_res['max_gcell_utilization'])*100:.0f}%",
+  ]
+  for bar_item, val, txt in zip(ebars, champ_ppa_bars, champ_annots):
+    ax_d2.text(
+        bar_item.get_x() + bar_item.get_width() / 2.0,
+        val + 1.8,
+        txt,
+        ha="center",
+        va="bottom",
+        fontsize=6.8,
+        fontweight="bold",
+        color="#1E3A8A",
+    )
+  ax_d2.set_xticks(p_idx)
+  ax_d2.set_xticklabels(ppa_cats, fontsize=7.2, fontweight="bold")
+  ax_d2.set_ylim(0.0, max(max(base_ppa_bars), max(champ_ppa_bars)) * 1.18)
+  ax_d2.set_ylabel("Physical Design Metric (Lower is Better)", fontsize=8.0)
+  ax_d2.set_title("(D2) Wirelength, Power & CTS Skew", fontsize=8.8, fontweight="bold")
+  ax_d2.grid(True, axis="y", linestyle=":", alpha=0.5)
+  ax_d2.legend(loc="upper right", fontsize=6.8, framealpha=0.92)
 
   out_path.parent.mkdir(parents=True, exist_ok=True)
   fig.savefig(out_path, dpi=160)
@@ -651,30 +814,115 @@ def visualize_floorplan_ppa_comparison(
 
 
 def postprocess(top_programs: list[Any] | None = None) -> None:
-  """Post-processes top evolved floorplan programs and renders comparison plot."""
+  """Post-processes top evolved floorplan programs, saves summary, and uploads to GCS."""
+  if top_programs is not None and not top_programs:
+    return
+  bucket_name = os.getenv("_CLOUD_BUCKET_NAME", "").strip()
+  user_exp = os.getenv("_USER_EXPERIMENT_NAME", "eda-openroad-ppa").strip()
   netlist = openroad_runner.load_netlist_graph(NETLIST_PATH)
-  champ_fp: Mapping[str, Any] = CHAMPION_FLOORPLAN
-  if top_programs:
-    best = top_programs[0]
-    cand_dir = getattr(best, "candidate_dir", None) or (
-        best.get("candidate_dir") if isinstance(best, Mapping) else None
-    )
-    if cand_dir:
-      metrics_path = Path(cand_dir) / "floorplan_ppa_metrics.json"
-      if metrics_path.is_file():
-        try:
-          loaded = json.loads(metrics_path.read_text(encoding="utf-8"))
-          if isinstance(loaded.get("floorplan"), Mapping):
-            champ_fp = loaded["floorplan"]
-        except (OSError, json.JSONDecodeError):
-          pass
 
-  visualize_floorplan_ppa_comparison(
+  best = top_programs[0] if top_programs else {}
+  best_prog_id = (
+      best.get("name", "").split("/")[-1]
+      if isinstance(best, Mapping)
+      else ""
+  )
+  best_score = (
+      get_score(best, METRIC_NAME)
+      if isinstance(best, Mapping) and best
+      else None
+  )
+  if best_prog_id:
+    logger.info(
+        "BEST OPENROAD FLOORPLAN PROGRAM FOUND: %s (Score: %s)",
+        best_prog_id,
+        best_score,
+    )
+
+  loaded_data: dict[str, Any] | None = None
+  cand_dir = getattr(best, "candidate_dir", None) or (
+      best.get("candidate_dir") if isinstance(best, Mapping) else None
+  )
+  if cand_dir:
+    for jpath in [
+        Path(cand_dir) / "floorplan_ppa_metrics.json",
+        *sorted(Path(cand_dir).glob("*.json")),
+    ]:
+      if jpath.is_file():
+        try:
+          candidate_json = json.loads(jpath.read_text(encoding="utf-8"))
+          if isinstance(candidate_json, dict) and isinstance(
+              candidate_json.get("floorplan"), Mapping
+          ):
+            loaded_data = candidate_json
+            break
+        except (OSError, json.JSONDecodeError):
+          continue
+
+  if loaded_data is None and bucket_name and best_prog_id:
+    programs_dir = os.getenv("_PROGRAMS_DIR", "program_candidates")
+    deployment_name = os.getenv("_DEPLOYMENT_NAME", "alpha-evolve")
+    job_prefix = f"{deployment_name}-workers"
+    job_id = get_job_id_from_program_name(best_prog_id, job_prefix)
+    for prefix in [
+        f"{user_exp}/{programs_dir}",
+        f"{user_exp}/archive/{programs_dir}",
+    ]:
+      blob_name = f"{prefix}/{job_id}/{best_prog_id}.json"
+      data = read_file_from_gcs(bucket_name, blob_name)
+      if isinstance(data, str):
+        try:
+          data = json.loads(data)
+        except json.JSONDecodeError:
+          data = None
+      if isinstance(data, dict) and isinstance(data.get("floorplan"), Mapping):
+        loaded_data = data
+        break
+
+
+  champ_fp: Mapping[str, Any] = (
+      loaded_data["floorplan"]
+      if loaded_data and isinstance(loaded_data.get("floorplan"), Mapping)
+      else CHAMPION_FLOORPLAN
+  )
+  if loaded_data is None:
+    champ_eval = openroad_runner.evaluate_floorplan_ppa(
+        dict(netlist), dict(champ_fp), fast_stage=2, verify_binary=False
+    )
+    c_score = score_floorplan_ppa(champ_eval)
+    if best_score is not None and math.isfinite(float(best_score)):
+      c_score = float(best_score)
+    loaded_data = {
+        "program_name": best_prog_id or "champion_perimeter_banked",
+        "score": c_score,
+        "ppa_composite_score": c_score,
+        "floorplan": dict(champ_fp),
+        "worst_wns_ps": champ_eval["worst_wns_ps"],
+        "total_tns_ps": champ_eval["total_tns_ps"],
+        "weighted_hpwl_mm": champ_eval["weighted_hpwl_mm"],
+        "total_power_mw": champ_eval["total_power_mw"],
+    }
+
+  results_env = os.getenv("_RESULTS_DIR")
+  output_dir = Path(results_env) if results_env else SAMPLE_DIR
+  output_dir.mkdir(parents=True, exist_ok=True)
+  summary_path = (
+      Path(results_env) / "best_floorplan_ppa_summary.json"
+      if results_env
+      else Path("/tmp/best_floorplan_ppa_summary.json")
+  )
+  summary_path.write_text(json.dumps(loaded_data, indent=2), encoding="utf-8")
+
+  plot_path = visualize_floorplan_ppa_comparison(
       baseline_fp=BASELINE_FLOORPLAN,
       champion_fp=champ_fp,
-      output_path=SAMPLE_DIR / "openroad_floorplan_ppa_comparison.png",
+      output_path=output_dir / "openroad_floorplan_ppa_comparison.png",
       netlist=netlist,
   )
+  if bucket_name:
+    for fpath in (summary_path, plot_path):
+      if fpath.exists():
+        upload_to_gcs(fpath, bucket_name, f"{user_exp}/results/{fpath.name}")
 
 
 if __name__ == "__main__":

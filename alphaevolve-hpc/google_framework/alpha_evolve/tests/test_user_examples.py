@@ -861,10 +861,15 @@ def test_all_five_examples_visualization_and_postprocess(
   monkeypatch.setenv("_CANDIDATE_DIR", str(cand_stent))
   stent_eval.evaluate()
   assert (cand_stent / "local_eval_run.json").is_file()
-  stent_png = stent_eval.visualize_stent_deployment(
+  stent_payload = json.loads(
+      (cand_stent / "local_eval_run.json").read_text(encoding="utf-8")
+  )
+  assert "w_s" in stent_payload and len(stent_payload["w_s"]) == 64
+  assert "vtk_polygons" in stent_payload and len(stent_payload["vtk_polygons"]) > 0
+  stent_png = stent_eval.visualize_stent_deployment_comparison(
       output_path=tmp_path / "stent_out.png"
   )
-  stent_gif = stent_eval.generate_stent_evolution_gif(
+  stent_gif = stent_eval.generate_stent_deployment_gif(
       output_path=tmp_path / "stent_out.gif"
   )
   assert stent_png.is_file() and stent_png.read_bytes().startswith(b"\x89PNG")
@@ -884,6 +889,7 @@ def test_all_five_examples_visualization_and_postprocess(
   cand_eda.mkdir()
   monkeypatch.setenv("_CANDIDATE_DIR", str(cand_eda))
   eda_eval.evaluate()
+  assert (cand_eda / "local_eval_run.json").is_file()
   assert (cand_eda / "floorplan_ppa_metrics.json").is_file()
   eda_png = eda_eval.visualize_floorplan_ppa_comparison(
       output_path=tmp_path / "eda_out.png"
@@ -904,6 +910,7 @@ def test_all_five_examples_visualization_and_postprocess(
   cand_seis.mkdir()
   monkeypatch.setenv("_CANDIDATE_DIR", str(cand_seis))
   seis_eval.evaluate()
+  assert (cand_seis / "local_eval_run.json").is_file()
   assert (cand_seis / "seismic_metrics.json").is_file()
   seis_png = seis_eval.visualize_seismic_comparison(
       output_path=tmp_path / "seis_out.png"
@@ -913,6 +920,74 @@ def test_all_five_examples_visualization_and_postprocess(
   )
   assert seis_png.is_file() and seis_png.read_bytes().startswith(b"\x89PNG")
   assert seis_gif.is_file() and seis_gif.read_bytes().startswith(b"GIF8")
+
+  # 3. Verify postprocess(top_programs) across all 5 examples:
+  #    - mocked GCS read_file_from_gcs + upload_to_gcs
+  #    - fallback on missing/corrupted GCS JSON
+  #    - empty top_programs no-op
+  monkeypatch.setenv("_CLOUD_BUCKET_NAME", "unit-test-bucket")
+  monkeypatch.setenv("_USER_EXPERIMENT_NAME", "unit-test-exp")
+
+  eval_modules = [
+      ("fsi", fsi_eval, cand_fsi / "local_eval_run.json"),
+      ("dock", dock_eval, cand_dock / "local_eval_run.json"),
+      ("stent", stent_eval, cand_stent / "local_eval_run.json"),
+      ("eda", eda_eval, cand_eda / "local_eval_run.json"),
+      ("seis", seis_eval, cand_seis / "local_eval_run.json"),
+  ]
+  for label, mod, json_file in eval_modules:
+    # Redirect SAMPLE_DIR to an isolated directory so static repo assets aren't overwritten
+    post_dir = tmp_path / f"post_{label}"
+    post_dir.mkdir()
+    monkeypatch.setattr(mod, "SAMPLE_DIR", post_dir)
+    if label == "eda":
+      models_dir = post_dir / "models"
+      models_dir.mkdir()
+      (models_dir / "asap7_riscv_npu_tile.json").write_text(
+          (eda_dir / "models" / "asap7_riscv_npu_tile.json").read_text(
+              encoding="utf-8"
+          ),
+          encoding="utf-8",
+      )
+
+    uploaded_blobs: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        mod,
+        "upload_to_gcs",
+        lambda local_path, bucket, blob, _u=uploaded_blobs: _u.append(
+            (bucket, blob)
+        ),
+    )
+
+    # Empty top_programs should safely return without uploading
+    mod.postprocess([])
+    assert not uploaded_blobs
+
+    # Valid GCS JSON payload retrieval + upload
+    raw_json_str = json_file.read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        mod, "read_file_from_gcs", lambda bucket, blob, _s=raw_json_str: _s
+    )
+    top_progs = [{
+        "name": f"projects/test/locations/global/programs/prog_{label}_1",
+        "evaluation": {
+            "scores": {"scores": [{"metric": mod.METRIC_NAME, "score": 9.99}]}
+        },
+    }]
+    mod.postprocess(top_progs)
+    assert len(uploaded_blobs) >= 2, f"{label} postprocess did not upload artifacts"
+    assert all(b == "unit-test-bucket" for b, _ in uploaded_blobs)
+
+    # Missing/corrupted GCS JSON fallback should still succeed without raising
+    uploaded_blobs.clear()
+    monkeypatch.setattr(
+        mod, "read_file_from_gcs", lambda bucket, blob: "{corrupted_json"
+    )
+    mod.postprocess(top_progs)
+    assert len(uploaded_blobs) >= 1, (
+        f"{label} postprocess failed on corrupted GCS JSON fallback"
+    )
+
 
 
 

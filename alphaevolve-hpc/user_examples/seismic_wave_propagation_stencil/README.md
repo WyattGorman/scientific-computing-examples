@@ -22,10 +22,10 @@ Low-order finite-difference acoustic propagators (`O(dx^2, dt^2)`) suffer from t
 
 ![Seismic 2D Wavefield Propagation Animation](seismic_wavefield_propagation.gif)
 
-- **Panel (A) — Marmousi-II Velocity Model $v_p(x, z)$ & Survey Geometry**: Shows the folded anticline (`1650 -> 3450 m/s`), the high-contrast `4350 m/s` salt diapir lens, the `24`-cell absorbing sponge perimeter, the `22 Hz` Ricker point source, and the 48-receiver surface hydrophone array.
-- **Panel (B) — 2D Wavefield Snapshots $u(x, z, t=280\text{ ms})$**: Compares the baseline 2nd-order 5-point cross stencil (`Interior NRMS = 1.713`, `Late Refl = 0.644`) against the evolved 8th-order dispersion-relation-preserving (DRP) isotropic 25-point stencil with 4th-order Lax-Wendroff temporal correction and cubic/quartic sponge (`Interior NRMS = 0.240`, `Late Refl = 0.110`).
-- **Panel (C) — Surface Receiver Shot Gather & Far-Offset Waveform Overlay**: Compares Receiver `#39` (`x = 1.58 km`) seismograms against the ultra-wide reflection-free Gold Reference (`pad = 80`), showing elimination of both high-wavenumber phase dispersion and late-time (`t >= 260 ms`) boundary reflections.
-- **Panel (D) — Multi-Model NRMS Error Breakdown & Speedup Scorecard**: Summarizes accuracy and reflection suppression across both **Marmousi-II** and the held-out **52-Degree Sub-Salt Overthrust Fault** (`seismic_accuracy_speedup_score = 1.00 -> 6.18`, `0.60 GCell/s`).
+- **Panel (A) — Marmousi-II Salt Lens Velocity Model $v_p(x, z)$ & Wavefield Comparison (`t = 280 ms`)**: Shows the folded anticline (`1650 -> 3450 m/s`) surrounding the `4350 m/s` salt diapir lens and compares the baseline 2nd-order 5-point cross stencil (`A1`, `Int NRMS = 1.713`, `Refl = 0.644`) against the evolved 8th-order DRP + Lax-Wendroff stencil (`A2`, `Int NRMS = 0.240`, `Refl = 0.110`).
+- **Panel (B) — Held-Out 52-Degree Sub-Salt Overthrust Fault Velocity Model & Wavefield Comparison (`t = 280 ms`)**: Evaluates generalization on an unseen steep `52 deg` sub-salt fault intersecting a `4420 m/s` salt wedge, comparing baseline 5-point dispersion/anisotropy (`B1`, `Int NRMS = 1.875`) against the champion DRP + LW propagator (`B2`, `Int NRMS = 0.264`).
+- **Panel (C) — Surface Receiver Shot Gather & Far-Offset Waveform Overlay**: Compares Receiver `#39` (`x = 1.58 km`) seismograms against the ultra-wide reflection-free 25-point Gold Reference (`pad = 80`), showing elimination of both high-wavenumber phase dispersion and late-time (`t >= 260 ms`) boundary reflections.
+- **Panel (D) — 1,400-Step CFL Energy Stability Curve `E(t)/E(700)` (`D1`) & Multi-Model NRMS/Speedup Scorecard (`D2`)**: Demonstrates how 4th-order Lax-Wendroff temporal dispersion compensation prevents high-order CFL blowup across the 1,400-step stability gate (`E(1400)/E(700) = 0.0029 <= 1.05`) while achieving `seismic_accuracy_speedup_score = 6.18` (`0.60 GCell/s`).
 
 ## Quickstart
 

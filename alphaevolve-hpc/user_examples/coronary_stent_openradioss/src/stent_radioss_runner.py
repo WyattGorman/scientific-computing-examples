@@ -391,8 +391,8 @@ def generate_openradioss_decks(
   return starter_path, engine_path
 
 
-def _parse_openradioss_vtk(vtk_path: Path) -> Dict[str, float]:
-  """Parses POINTS, Displacement, 2DELEM_Plastic_Strain, and 2DELEM_Von_Mises from VTK."""
+def _parse_openradioss_vtk(vtk_path: Path) -> Dict[str, Any]:
+  """Parses POINTS, POLYGONS, Displacement, 2DELEM_Plastic_Strain, and 2DELEM_Von_Mises from VTK."""
   if not vtk_path.exists():
     return {}
   lines = vtk_path.read_text(errors="replace").splitlines()
@@ -404,6 +404,9 @@ def _parse_openradioss_vtk(vtk_path: Path) -> Dict[str, float]:
   max_disp = 0.0
   max_epsp = 0.0
   max_vm_gpa = 0.0
+  pts_xyz: List[List[float]] = []
+  vtk_polygons: List[List[List[float]]] = []
+  n_polygons = 0
 
   i = 0
   n_lines = len(lines)
@@ -419,6 +422,7 @@ def _parse_openradioss_vtk(vtk_path: Path) -> Dict[str, float]:
       for j in range(i + 1, min(i + 1 + n_pts, n_lines)):
         coords = [float(x) for x in lines[j].split()]
         if len(coords) >= 3:
+          pts_xyz.append([round(coords[0], 4), round(coords[1], 4), round(coords[2], 4)])
           r_pt = math.hypot(coords[0], coords[1])
           z_pt = coords[2]
           radii.append(r_pt)
@@ -433,6 +437,20 @@ def _parse_openradioss_vtk(vtk_path: Path) -> Dict[str, float]:
         distal_r = sum(dist_radii) / len(dist_radii) if dist_radii else mean_r
         axial_span = max(z_vals) - min(z_vals)
       i += n_pts + 1
+      continue
+    if line.startswith("POLYGONS ") or line.startswith("CELLS "):
+      parts = line.split()
+      n_cells = int(parts[1]) if len(parts) >= 2 else 0
+      for j in range(i + 1, min(i + 1 + n_cells, n_lines)):
+        idx_tokens = [int(x) for x in lines[j].split()]
+        if len(idx_tokens) >= 4:
+          n_verts = idx_tokens[0]
+          vert_ids = idx_tokens[1 : 1 + n_verts]
+          if all(0 <= vid < len(pts_xyz) for vid in vert_ids):
+            n_polygons += 1
+            if len(vtk_polygons) < 48:
+              vtk_polygons.append([pts_xyz[vid] for vid in vert_ids])
+      i += n_cells + 1
       continue
     if line.startswith("VECTORS Displacement") or line.startswith(
         "VECTORS DISPLACEMENT"
@@ -479,6 +497,8 @@ def _parse_openradioss_vtk(vtk_path: Path) -> Dict[str, float]:
       "max_disp_mm": max_disp,
       "max_eps_p": max_epsp,
       "max_von_mises_gpa": max_vm_gpa,
+      "vtk_polygon_count": n_polygons,
+      "vtk_polygons": vtk_polygons,
   }
 
 
@@ -672,6 +692,8 @@ def run_openradioss_binary_verification(params: Dict[str, float]) -> Dict[str, A
         "vtk_max_eps_p": round(max_vtk_epsp, 5),
         "vtk_max_von_mises_mpa": round(max_vtk_vm_mpa, 2),
         "vtk_max_displacement_mm": round(max_vtk_disp, 5),
+        "vtk_polygon_count": int(a3.get("vtk_polygon_count", 0)),
+        "vtk_polygons": a3.get("vtk_polygons", []),
         **csv_info,
     }
 
@@ -1040,6 +1062,18 @@ def simulate_3stage_stent_deployment(
         )
         k_radial_kpa = k_radial_kpa * (0.90 + 0.10 * fea_stiff_mod * ie_mod)
 
+  vtk_polys = binary_info.get("vtk_polygons") if isinstance(binary_info, dict) else None
+  if not vtk_polys:
+    stage_mesh = build_3d_stent_stage_meshes(
+        params,
+        od_stage_mm=od_deployed_mm,
+        foreshortening_pct=foreshortening_pct,
+        dogboning_pct=dogboning_pct,
+        max_eps_p=max_eps_p,
+        max_vm_mpa=max_von_mises_gpa * 1000.0,
+    )
+    vtk_polys = stage_mesh["quads"][:48]
+
   return {
       "valid": True,
       "params": dict(params),
@@ -1051,11 +1085,13 @@ def simulate_3stage_stent_deployment(
       "max_von_mises_mpa": round(max_von_mises_gpa * 1000.0, 1),
       "k_radial_kpa": round(k_radial_kpa, 2),
       "s_grid": [round(float(x), 4) for x in s_grid],
+      "w_s": [round(float(x), 5) for x in w_s],
       "w_s_um": [round(float(x * 1000.0), 2) for x in w_s],
       "eps_total_outer": [round(float(x), 5) for x in eps_total_outer],
       "eps_p_profile": [round(float(x), 5) for x in eps_p_profile],
       "von_mises_mpa_profile": [round(float(x), 1) for x in von_mises_mpa_profile],
       "bending_moment_s": [round(float(x), 6) for x in bending_moment_s],
+      "vtk_polygons": vtk_polys,
       "geometry": geom_meta,
       "openradioss_binary": binary_info,
   }

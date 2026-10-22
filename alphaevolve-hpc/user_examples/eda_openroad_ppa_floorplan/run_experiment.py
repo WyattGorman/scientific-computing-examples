@@ -92,7 +92,7 @@ def main() -> None:
           "scores": {
               "scores": [{
                   "metric": METRIC_NAME,
-                  "score": -55.7647,
+                  "score": -130.2869,
               }]
           }
       },

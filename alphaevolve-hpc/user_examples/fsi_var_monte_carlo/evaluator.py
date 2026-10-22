@@ -21,18 +21,54 @@ from pathlib import Path
 import subprocess
 from typing import Any, Mapping
 
-from alpha_evolve.models import (
-    AlphaEvolveEvaluationInsight,
-    AlphaEvolveEvaluationInsights,
-    AlphaEvolveEvaluationScore,
-    AlphaEvolveEvaluationScores,
-    AlphaEvolveProgramEvaluation,
-)
-from alpha_evolve.utils import (
-    get_job_id_from_program_name,
-    read_file_from_gcs,
-)
-from alpha_evolve.visualization import get_score
+try:
+  from alpha_evolve.models import (
+      AlphaEvolveEvaluationInsight,
+      AlphaEvolveEvaluationInsights,
+      AlphaEvolveEvaluationScore,
+      AlphaEvolveEvaluationScores,
+      AlphaEvolveProgramEvaluation,
+  )
+  from alpha_evolve.utils import (
+      get_job_id_from_program_name,
+      read_file_from_gcs,
+  )
+  from alpha_evolve.visualization import get_score
+except ImportError:
+
+  class _DictModel(dict):
+
+    def __init__(self, **kwargs: Any):
+      super().__init__(**kwargs)
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+      del kwargs
+      return dict(self)
+
+  AlphaEvolveEvaluationInsight = _DictModel
+  AlphaEvolveEvaluationInsights = _DictModel
+  AlphaEvolveEvaluationScore = _DictModel
+  AlphaEvolveEvaluationScores = _DictModel
+  AlphaEvolveProgramEvaluation = _DictModel
+
+  def get_job_id_from_program_name(
+      program_name: str, prefix: str = ""
+  ) -> str:
+    del prefix
+    return program_name.split("/")[-1]
+
+  def read_file_from_gcs(bucket_name: str, blob_name: str) -> str | None:
+    del bucket_name, blob_name
+    return None
+
+  def get_score(program: Mapping[str, Any], metric_name: str) -> float:
+    scores = (
+        program.get("evaluation", {}).get("scores", {}).get("scores", [])
+    )
+    for item in scores:
+      if item.get("metric") == metric_name:
+        return float(item.get("score", float("-inf")))
+    return float("-inf")
 import numpy as np
 
 try:
@@ -644,6 +680,8 @@ def visualize_var_cvar_comparison(
 
 def postprocess(top_programs: list[dict[str, Any]] | None = None) -> None:
   """Postprocessing hook generating FRTB VaR/CVaR comparison plots for top programs."""
+  if top_programs is not None and not top_programs:
+    return
   bucket_name = os.getenv("_CLOUD_BUCKET_NAME", "").strip()
   user_exp = os.getenv("_USER_EXPERIMENT_NAME", "fsi-var-mc").strip()
 
@@ -666,7 +704,18 @@ def postprocess(top_programs: list[dict[str, Any]] | None = None) -> None:
     )
 
   best_data = None
-  if bucket_name and best_prog_id:
+  if isinstance(best_prog, Mapping) and best_prog.get("candidate_dir"):
+    cand_dir = Path(str(best_prog["candidate_dir"]))
+    for jpath in sorted(cand_dir.glob("*.json")):
+      try:
+        loaded = json.loads(jpath.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict) and "regimes" in loaded:
+          best_data = loaded
+          break
+      except Exception:  # pylint: disable=broad-exception-caught
+        continue
+
+  if best_data is None and bucket_name and best_prog_id:
     programs_dir = os.getenv("_PROGRAMS_DIR", "program_candidates")
     deployment_name = os.getenv("_DEPLOYMENT_NAME", "alpha-evolve")
     job_prefix = f"{deployment_name}-workers"
@@ -677,9 +726,15 @@ def postprocess(top_programs: list[dict[str, Any]] | None = None) -> None:
     ]:
       blob_name = f"{prefix}/{job_id}/{best_prog_id}.json"
       data = read_file_from_gcs(bucket_name, blob_name)
+      if isinstance(data, str):
+        try:
+          data = json.loads(data)
+        except json.JSONDecodeError:
+          data = None
       if isinstance(data, dict) and "regimes" in data:
         best_data = data
         break
+
 
   if best_data is None:
     best_data = dict(CHAMPION_TELEMETRY)

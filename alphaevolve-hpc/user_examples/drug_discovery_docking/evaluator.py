@@ -22,18 +22,54 @@ import sys
 import time
 from typing import Any, Mapping
 
-from alpha_evolve.models import (
-    AlphaEvolveEvaluationInsight,
-    AlphaEvolveEvaluationInsights,
-    AlphaEvolveEvaluationScore,
-    AlphaEvolveEvaluationScores,
-    AlphaEvolveProgramEvaluation,
-)
-from alpha_evolve.utils import (
-    get_job_id_from_program_name,
-    read_file_from_gcs,
-)
-from alpha_evolve.visualization import get_score
+try:
+  from alpha_evolve.models import (
+      AlphaEvolveEvaluationInsight,
+      AlphaEvolveEvaluationInsights,
+      AlphaEvolveEvaluationScore,
+      AlphaEvolveEvaluationScores,
+      AlphaEvolveProgramEvaluation,
+  )
+  from alpha_evolve.utils import (
+      get_job_id_from_program_name,
+      read_file_from_gcs,
+  )
+  from alpha_evolve.visualization import get_score
+except ImportError:
+
+  class _DictModel(dict):
+
+    def __init__(self, **kwargs: Any):
+      super().__init__(**kwargs)
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+      del kwargs
+      return dict(self)
+
+  AlphaEvolveEvaluationInsight = _DictModel
+  AlphaEvolveEvaluationInsights = _DictModel
+  AlphaEvolveEvaluationScore = _DictModel
+  AlphaEvolveEvaluationScores = _DictModel
+  AlphaEvolveProgramEvaluation = _DictModel
+
+  def get_job_id_from_program_name(
+      program_name: str, prefix: str = ""
+  ) -> str:
+    del prefix
+    return program_name.split("/")[-1]
+
+  def read_file_from_gcs(bucket_name: str, blob_name: str) -> str | None:
+    del bucket_name, blob_name
+    return None
+
+  def get_score(program: Mapping[str, Any], metric_name: str) -> float:
+    scores = (
+        program.get("evaluation", {}).get("scores", {}).get("scores", [])
+    )
+    for item in scores:
+      if item.get("metric") == metric_name:
+        return float(item.get("score", float("-inf")))
+    return float("-inf")
 import numpy as np
 
 try:
@@ -457,17 +493,37 @@ def _plot_3d_pocket_pose(
       label="Receptor Pocket Atoms",
   )
 
-  # Plot 3D pharmacophore anchors and residue labels
+  # Plot 3D pharmacophore anchors and residue labels with outward radial offsets
   pharm = pocket_spec["pharmacophore_features"]
   lig_xyz = np.array(target_telemetry.get("best_docked_heavy_xyz", []), dtype=float)
   lig_types = list(target_telemetry.get("best_lig_types", []))
+  pocket_center = np.mean(rec_xyz, axis=0) if len(rec_xyz) > 0 else np.zeros(3)
+
+  placed_label_xyz: list[np.ndarray] = []
+  # Camera basis vectors for elev=24 deg, azim=-48 deg to prevent 2D screen-space label overlap
+  elev_rad = math.radians(24.0)
+  azim_rad = math.radians(-48.0)
+  cam_u = np.array([-math.sin(azim_rad), math.cos(azim_rad), 0.0])
+  cam_v = np.array([
+      -math.sin(elev_rad) * math.cos(azim_rad),
+      -math.sin(elev_rad) * math.sin(azim_rad),
+      math.cos(elev_rad),
+  ])
+  placed_screen_uv: list[tuple[float, float]] = []
 
   for idx, feat in enumerate(pharm):
     f_xyz = np.array(feat["xyz"], dtype=float)
     f_type = feat["type"]
-    short_label = str(
+    f_id = str(feat.get("feature_id", ""))
+    raw_res = str(
         feat.get("residue", feat.get("feature_id", feat.get("name", "Hotspot")))
     )
+    if "HINGE_NH" in f_id:
+      short_label = f"{raw_res}(NH)"
+    elif "HINGE_CO" in f_id:
+      short_label = f"{raw_res}(CO)"
+    else:
+      short_label = raw_res.replace("_", "/")
     if f_type == "neg_charge_acceptor":
       f_col, f_marker = "#dc2626", "D"
     elif "hbond" in f_type:
@@ -486,14 +542,40 @@ def _plot_3d_pocket_pose(
         linewidths=0.9,
         label="Pharmacophore Hotspots" if idx == 0 else None,
     )
+    u_dir = 1.0 if float(np.dot(f_xyz - pocket_center, cam_u)) >= 0.0 else -1.0
+    v_dir = 1.0 if idx % 2 == 0 else -0.75
+    lbl_pos = f_xyz + cam_u * (1.05 * u_dir) + cam_v * (0.85 + 0.45 * v_dir)
+    for _ in range(10):
+      u_cur = float(np.dot(lbl_pos, cam_u))
+      v_cur = float(np.dot(lbl_pos, cam_v))
+      collision = False
+      for u_prev, v_prev in placed_screen_uv:
+        if abs(u_cur - u_prev) < 3.25 and abs(v_cur - v_prev) < 1.55:
+          collision = True
+          du = 1.85 if u_cur >= u_prev else -1.85
+          dv = 1.25 if v_cur >= v_prev else -1.25
+          lbl_pos = lbl_pos + cam_u * du + cam_v * dv
+          break
+      if not collision:
+        break
+    placed_screen_uv.append(
+        (float(np.dot(lbl_pos, cam_u)), float(np.dot(lbl_pos, cam_v)))
+    )
     ax.text(
-        f_xyz[0] + 0.25,
-        f_xyz[1] + 0.25,
-        f_xyz[2] + 0.35,
+        lbl_pos[0],
+        lbl_pos[1],
+        lbl_pos[2],
         short_label,
-        fontsize=7.5,
+        fontsize=7.2,
         fontweight="bold",
-        color="#1e293b",
+        color="#0f172a",
+        bbox=dict(
+            boxstyle="round,pad=0.12",
+            facecolor="white",
+            edgecolor=f_col,
+            linewidth=0.5,
+            alpha=0.88,
+        ),
     )
 
     # Draw dashed interaction vector from anchor to nearest complementary ligand atom
@@ -511,13 +593,13 @@ def _plot_3d_pocket_pose(
             alpha=0.85,
         )
 
-  # Plot docked 3D ligand heavy atoms & covalent bonds (distance < 1.85 A)
+  # Plot docked 3D ligand heavy atoms & covalent bonds
   if lig_xyz.ndim == 2 and len(lig_xyz) > 0:
     n_atoms = len(lig_xyz)
     for i in range(n_atoms):
       for j in range(i + 1, n_atoms):
         d_ij = float(np.linalg.norm(lig_xyz[i] - lig_xyz[j]))
-        if d_ij <= 1.85:
+        if d_ij <= 1.85 or (j == i + 1 and d_ij <= 2.45):
           ax.plot(
               [lig_xyz[i, 0], lig_xyz[j, 0]],
               [lig_xyz[i, 1], lig_xyz[j, 1]],
@@ -560,6 +642,98 @@ def _plot_3d_pocket_pose(
   ax.legend(loc="upper left", fontsize=7.5, framealpha=0.88)
 
 
+def _build_fallback_2d_skeletal_graph(
+    smiles: str,
+) -> tuple[np.ndarray, list[tuple[int, int, float]], list[str]]:
+  """Builds a clean 2D hexagonal ring + substituent skeletal graph when RDKit is unavailable."""
+  coords_list: list[list[float]] = []
+  bonds: list[tuple[int, int, float]] = []
+  symbols: list[str] = []
+
+  def add_hexagon(
+      cx: float,
+      cy: float,
+      r: float,
+      ring_syms: list[str],
+      aromatic: bool = True,
+  ) -> list[int]:
+    idxs: list[int] = []
+    for k in range(6):
+      ang = math.radians(30.0 + 60.0 * k)
+      coords_list.append([cx + r * math.cos(ang), cy + r * math.sin(ang)])
+      symbols.append(ring_syms[k])
+      idxs.append(len(coords_list) - 1)
+    for k in range(6):
+      b_ord = 1.5 if (aromatic and k % 2 == 0) else 1.0
+      bonds.append((idxs[k], idxs[(k + 1) % 6], b_ord))
+    return idxs
+
+  r_hex = 0.80
+  dx_fused = r_hex * math.sqrt(3.0)
+  # Core ring A (benzene) fused to ring B (pyrimidine/quinazoline)
+  ring_a = add_hexagon(-1.10, -0.15, r_hex, ["C", "C", "C", "C", "C", "C"], aromatic=True)
+  ring_b = add_hexagon(
+      -1.10 + dx_fused, -0.15, r_hex, ["C", "C", "C", "C", "N", "N"], aromatic=True
+  )
+
+  if "CCNCC" in smiles or "CCN(C)CC" in smiles or "CCOCC" in smiles:
+    # Saturated 6-membered piperazine / morpholine warhead ring attached to ring_b[0] (30 deg)
+    cx_c = -1.10 + dx_fused + 1.85 * dx_fused * 0.86
+    cy_c = -0.15 - 0.85 * r_hex
+    ring_c = add_hexagon(
+        cx_c,
+        cy_c,
+        r_hex,
+        ["C", "C", "N", "C", "C", "N+" if "CCN" in smiles else "O"],
+        aromatic=False,
+    )
+    bonds.append((ring_b[5], ring_c[2], 1.0))
+    # Upper aryl substituent attached to ring_b[1] (90 deg top vertex) -> ring_d[4] (270 deg bottom vertex)
+    cx_d = -1.10 + dx_fused
+    cy_d = -0.15 + 2.30 * r_hex
+    ring_d = add_hexagon(
+        cx_d,
+        cy_d,
+        r_hex * 0.90,
+        ["C", "C", "C", "C", "C", "C"],
+        aromatic=True,
+    )
+    bonds.append((ring_b[1], ring_d[4], 1.0))
+    if "Cl" in smiles:
+      coords_list.append([coords_list[ring_d[0]][0] + 0.58, coords_list[ring_d[0]][1] + 0.32])
+      symbols.append("Cl")
+      bonds.append((ring_d[0], len(coords_list) - 1, 1.0))
+    if "F" in smiles:
+      coords_list.append([coords_list[ring_a[2]][0] - 0.62, coords_list[ring_a[2]][1] + 0.32])
+      symbols.append("F")
+      bonds.append((ring_a[2], len(coords_list) - 1, 1.0))
+    if "O" in smiles:
+      coords_list.append([coords_list[ring_a[3]][0] - 0.62, coords_list[ring_a[3]][1] - 0.32])
+      symbols.append("O")
+      bonds.append((ring_a[3], len(coords_list) - 1, 1.0))
+  else:
+    # Baseline carboxamide fragment: quinazoline + amide tail attached to ring_b[0] (30 deg)
+    c_idx = len(coords_list)
+    coords_list.append([coords_list[ring_b[0]][0] + 0.68, coords_list[ring_b[0]][1] + 0.35])
+    symbols.append("C")
+    bonds.append((ring_b[0], c_idx, 1.0))
+    o_idx = len(coords_list)
+    coords_list.append([coords_list[c_idx][0] + 0.05, coords_list[c_idx][1] + 0.72])
+    symbols.append("O")
+    bonds.append((c_idx, o_idx, 2.0))
+    n_idx = len(coords_list)
+    coords_list.append([coords_list[c_idx][0] + 0.65, coords_list[c_idx][1] - 0.38])
+    symbols.append("NH")
+    bonds.append((c_idx, n_idx, 1.0))
+    me_idx = len(coords_list)
+    coords_list.append([coords_list[n_idx][0] + 0.65, coords_list[n_idx][1] + 0.35])
+    symbols.append("C")
+    bonds.append((n_idx, me_idx, 1.0))
+
+  return np.array(coords_list, dtype=float), bonds, symbols
+
+
+
 def _draw_2d_smiles_structure(
     ax: Any,
     smiles: str,
@@ -569,7 +743,8 @@ def _draw_2d_smiles_structure(
     scale: float,
     label_header: str,
 ) -> None:
-  """Draws a 2D chemical structure depiction (RDKit 2D coords or PCA projection of 3D pose)."""
+  """Draws a 2D chemical structure depiction (RDKit 2D coords or hexagonal skeletal graph)."""
+  del target_telemetry
   pts: np.ndarray | None = None
   bonds: list[tuple[int, int, float]] = []
   symbols: list[str] = []
@@ -599,40 +774,15 @@ def _draw_2d_smiles_structure(
       ]
 
   if pts is None:
-    xyz = np.array(target_telemetry.get("best_docked_heavy_xyz", []), dtype=float)
-    lig_types = list(target_telemetry.get("best_lig_types", []))
-    if xyz.ndim == 2 and len(xyz) >= 3:
-      centered = xyz - np.mean(xyz, axis=0, keepdims=True)
-      _, _, vt = np.linalg.svd(centered, full_matrices=False)
-      pts = centered @ vt[:2].T
-      n_a = len(xyz)
-      for i in range(n_a):
-        for j in range(i + 1, n_a):
-          d_ij = float(np.linalg.norm(xyz[i] - xyz[j]))
-          if d_ij <= 1.85:
-            b_order = 1.5 if d_ij < 1.43 else 1.0
-            bonds.append((i, j, b_order))
-      type_to_sym = {
-          "N_pos": "N+",
-          "NA": "N",
-          "HD": "NH",
-          "OA": "O",
-          "O_neg": "O-",
-          "Hal": "F/Cl",
-      }
-      symbols = [
-          type_to_sym.get(
-              str(lig_types[k]) if k < len(lig_types) else "C", "C"
-          )
-          for k in range(n_a)
-      ]
+    pts, bonds, symbols = _build_fallback_2d_skeletal_graph(smiles)
 
   if pts is not None and len(pts) > 0:
     pts = pts - np.mean(pts, axis=0, keepdims=True)
-    span = max(float(np.ptp(pts[:, 0])), float(np.ptp(pts[:, 1])), 1.0)
-    pts = pts * (scale / span)
-    pts[:, 0] += x_offset
-    pts[:, 1] += y_offset
+    span_x = max(float(np.ptp(pts[:, 0])), 1.0)
+    span_y = max(float(np.ptp(pts[:, 1])), 1.0)
+    iso_scale = min((scale * 1.65) / span_x, (scale * 0.92) / span_y)
+    pts[:, 0] = pts[:, 0] * iso_scale + x_offset
+    pts[:, 1] = pts[:, 1] * iso_scale + y_offset
 
     for i, j, btype in bonds:
       p1, p2 = pts[i], pts[j]
@@ -640,18 +790,18 @@ def _draw_2d_smiles_structure(
           [p1[0], p2[0]],
           [p1[1], p2[1]],
           color="#1e293b",
-          lw=1.9 if btype == 1.0 else 2.2,
+          lw=2.0 if btype == 1.0 else 2.3,
           zorder=2,
       )
       if btype >= 1.5:
         vec = p2 - p1
         norm = max(float(np.linalg.norm(vec)), 1e-6)
-        perp = np.array([-vec[1], vec[0]]) / norm * 0.07
+        perp = np.array([-vec[1], vec[0]]) / norm * 0.085
         ax.plot(
             [p1[0] + perp[0], p2[0] + perp[0]],
             [p1[1] + perp[1], p2[1] + perp[1]],
             color="#475569",
-            lw=1.1,
+            lw=1.2,
             ls="--" if btype == 1.5 else "-",
             zorder=2,
         )
@@ -673,7 +823,7 @@ def _draw_2d_smiles_structure(
         ax.scatter(
             [pts[idx, 0]],
             [pts[idx, 1]],
-            s=125,
+            s=135,
             color="white",
             edgecolors=c,
             linewidths=1.4,
@@ -685,7 +835,7 @@ def _draw_2d_smiles_structure(
             sym.replace("/Cl", ""),
             ha="center",
             va="center",
-            fontsize=6.8,
+            fontsize=6.6,
             fontweight="bold",
             color=c,
             zorder=4,
@@ -694,22 +844,22 @@ def _draw_2d_smiles_structure(
         ax.scatter(
             [pts[idx, 0]],
             [pts[idx, 1]],
-            s=22,
+            s=24,
             color="#334155",
             zorder=3,
         )
 
   ax.text(
       x_offset,
-      y_offset - scale * 0.58,
+      y_offset - scale * 0.56,
       label_header,
       ha="center",
       va="top",
-      fontsize=7.1,
+      fontsize=6.6,
       fontweight="bold",
       color="#0f172a",
       bbox=dict(
-          boxstyle="round,pad=0.25",
+          boxstyle="round,pad=0.22",
           facecolor="#f8fafc",
           edgecolor="#cbd5e1",
           alpha=0.95,
@@ -780,23 +930,25 @@ def visualize_docking_comparison(
 
   # Panel C: 2D RDKit Chemical Structures of Baseline vs. Evolved Pocket-Conditioned Leads
   ax2 = fig.add_subplot(2, 2, 3)
-  ax2.set_xlim(-7.6, 7.6)
-  ax2.set_ylim(-2.5, 2.5)
+  ax2.set_xlim(-9.0, 9.0)
+  ax2.set_ylim(-2.6, 2.7)
   ax2.axis("off")
   ax2.set_title(
       "C. 2D Chemical Structures: Baseline vs. Pocket-Conditioned Champion Leads",
       fontsize=11.0,
       fontweight="bold",
   )
+  for x_sep in (-3.0, 3.0):
+    ax2.plot([x_sep, x_sep], [-2.4, 2.4], color="#e2e8f0", lw=1.2, ls="--", zorder=1)
 
   k_base = base["primary_kras_g12d"]
   _draw_2d_smiles_structure(
       ax2,
       str(k_base["best_smiles"]),
       k_base,
-      x_offset=-5.0,
-      y_offset=0.65,
-      scale=2.7,
+      x_offset=-6.0,
+      y_offset=0.75,
+      scale=2.55,
       label_header=(
           "Baseline (Unconditioned)\n"
           f"KRAS ΔG={float(k_base['best_vina_dg']):.2f} | EGFR ΔG={float(base['heldout_egfr_t790m']['best_vina_dg']):.2f}\n"
@@ -808,10 +960,10 @@ def visualize_docking_comparison(
       str(k_evol["best_smiles"]),
       k_evol,
       x_offset=0.0,
-      y_offset=0.65,
-      scale=2.8,
+      y_offset=0.75,
+      scale=2.55,
       label_header=(
-          "KRAS G12D Lead (Piperazine Basic Warhead)\n"
+          "KRAS G12D Lead (Piperazine Basic)\n"
           f"ΔG={float(k_evol['best_vina_dg']):.2f} | QED={float(k_evol['best_qed']):.2f} | SA={float(k_evol['best_sa_score']):.2f}\n"
           f"Asp12 Salt Bridges={int(k_evol.get('best_salt_bridges', 2))} | Strain={float(k_evol['best_strain_kcal']):.2f}"
       ),
@@ -820,11 +972,11 @@ def visualize_docking_comparison(
       ax2,
       str(e_evol["best_smiles"]),
       e_evol,
-      x_offset=5.0,
-      y_offset=0.65,
-      scale=2.8,
+      x_offset=6.0,
+      y_offset=0.75,
+      scale=2.55,
       label_header=(
-          "EGFR T790M Lead (Anilinoquinazoline Hinge)\n"
+          "EGFR T790M Lead (Anilinoquinazoline)\n"
           f"ΔG={float(e_evol['best_vina_dg']):.2f} | QED={float(e_evol['best_qed']):.2f} | SA={float(e_evol['best_sa_score']):.2f}\n"
           f"Met793 H-Bonds={int(e_evol.get('best_key_hbonds', 3))} | Strain={float(e_evol['best_strain_kcal']):.2f}"
       ),
@@ -906,6 +1058,8 @@ def visualize_docking_comparison(
 
 def postprocess(top_programs: list[dict[str, Any]] | None = None) -> None:
   """Postprocessing hook generating 3D docking pose & MPO comparison plots."""
+  if top_programs is not None and not top_programs:
+    return
   bucket_name = os.getenv("_CLOUD_BUCKET_NAME", "").strip()
   user_exp = os.getenv("_USER_EXPERIMENT_NAME", "drug-docking").strip()
 
@@ -928,7 +1082,18 @@ def postprocess(top_programs: list[dict[str, Any]] | None = None) -> None:
     )
 
   best_data = None
-  if bucket_name and best_prog_id:
+  if isinstance(best_prog, Mapping) and best_prog.get("candidate_dir"):
+    cand_dir = Path(str(best_prog["candidate_dir"]))
+    for jpath in sorted(cand_dir.glob("*.json")):
+      try:
+        loaded = json.loads(jpath.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict) and "primary_kras_g12d" in loaded:
+          best_data = loaded
+          break
+      except Exception:  # pylint: disable=broad-exception-caught
+        continue
+
+  if best_data is None and bucket_name and best_prog_id:
     programs_dir = os.getenv("_PROGRAMS_DIR", "program_candidates")
     deployment_name = os.getenv("_DEPLOYMENT_NAME", "alpha-evolve")
     job_prefix = f"{deployment_name}-workers"
@@ -939,13 +1104,18 @@ def postprocess(top_programs: list[dict[str, Any]] | None = None) -> None:
     ]:
       blob_name = f"{prefix}/{job_id}/{best_prog_id}.json"
       data = read_file_from_gcs(bucket_name, blob_name)
+      if isinstance(data, str):
+        try:
+          data = json.loads(data)
+        except Exception:  # pylint: disable=broad-exception-caught
+          data = None
       if isinstance(data, dict) and "primary_kras_g12d" in data:
         best_data = data
         break
 
   base_default, champ_default = _compute_baseline_and_champion_telemetry()
   if best_data is None:
-    best_data = champ_default
+    best_data = dict(champ_default)
     if best_score is not None and math.isfinite(float(best_score)):
       best_data["score"] = float(best_score)
 
