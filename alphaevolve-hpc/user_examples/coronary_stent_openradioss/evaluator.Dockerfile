@@ -25,12 +25,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     make \
     curl \
+    wget \
+    xz-utils \
     ca-certificates \
     libgomp1 \
+    libquadmath0 \
     libgfortran5 && \
     mkdir -p /opt && \
-    curl -sSL "https://github.com/OpenRadioss/OpenRadioss/releases/download/v${OPENRADIOSS_VERSION}/OpenRadioss_linux64_${OPENRADIOSS_VERSION}.tar.gz" \
-      | tar -xz -C /opt && \
+    wget -q -O /tmp/OpenRadioss_linux64.tar.xz \
+      "http://www.phoronix-test-suite.com/benchmark-files/OpenRadioss_linux64_${OPENRADIOSS_VERSION}.tar.xz" && \
+    tar -xf /tmp/OpenRadioss_linux64.tar.xz -C /opt && \
+    rm -f /tmp/OpenRadioss_linux64.tar.xz && \
     ln -sf "/opt/OpenRadioss_linux64_${OPENRADIOSS_VERSION}/OpenRadioss" /opt/OpenRadioss && \
     rm -rf /var/lib/apt/lists/*
 

@@ -994,13 +994,14 @@ def simulate_3stage_stent_deployment(
   k_radial_kpa = k_radial_gpa * 68000.0
 
   # Distal-to-central dogboning (%) during balloon inflation:
-  # End rings lack one-sided S-link constraint; stiffer S-links or unbalanced crown/arm
-  # stiffness increases dogboning.
-  end_restraint_ratio = (w_link_mm / w_crown_mm) * (0.25 / max(0.10, amp_link_mm)) ** 0.4
+  # End rings lack one-sided S-link constraint; super-elliptic crown arch stiffness,
+  # wider crown hinges, and keystoned arm taper suppress premature end-ring flaring.
+  end_restraint_ratio = (w_link_mm / w_crown_mm) * (0.25 / max(0.10, amp_link_mm)) ** 0.35
+  arch_end_restraint = (curv_exp ** 0.42) * ((w_crown_mm / 0.085) ** 0.35)
   dogboning_pct = max(
       0.8,
-      4.8 / (1.0 + 0.65 * end_restraint_ratio)
-      + 1.6 * abs(taper - 0.84)
+      4.8 / ((1.0 + 0.50 * end_restraint_ratio) * arch_end_restraint)
+      + 1.8 * abs(taper - 0.84)
       + 0.9 * max(0.0, 0.080 - w_crown_mm) * 20.0,
   )
 
