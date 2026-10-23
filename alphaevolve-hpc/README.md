@@ -79,6 +79,7 @@ We prepackaged a set of examples to get you started. In the following section, w
 | [`airfoil_openfoam`](user_examples/airfoil_openfoam/README.md) | Python | `lift_to_drag_ratio` | Uses OpenFOAM-14 (`incompressibleFluid` / `airFoil2D`) for 2D RANS CFD simulation |
 | [`rocket_nozzle_openfoam`](user_examples/rocket_nozzle_openfoam/README.md) | Python | `thrust_coefficient` | Uses OpenFOAM-14 (`shockFluid`) for 2D axisymmetric supersonic Rao bell nozzle contour optimization |
 | [`heatsink_openfoam`](user_examples/heatsink_openfoam/README.md) | Python | `thermal_score` | Uses OpenFOAM-14 (`foamMultiRun` / `snappyHexMesh`) for 3D liquid-cooling cold-plate CHT |
+| [`f1_racecar_openfoam`](user_examples/f1_racecar_openfoam/README.md) | Python | `f1_aero_lap_score` | Motorsport External Aero CFD: 3D PERRINN 2017 Formula 1 ground-effect Venturi floor, outwash & wing evolution with OpenFOAM-14 (`snappyHexMesh` + Spalart-Allmaras RANS) |
 | [`llm_fine_tuning_cloud_batch`](user_examples/llm_fine_tuning_cloud_batch/README.md) | Python | `neg_eval_loss` | GPU training/evaluation (PyTorch/LoRA) on Cloud Batch |
 | [`tpu_gemm_cloud_batch`](user_examples/tpu_gemm_cloud_batch/README.md) | Python | `tflops` | Cloud TPU Pallas / JAX matrix multiplication kernel optimization |
 | [`cell_phone_drop_openradioss`](user_examples/cell_phone_drop_openradioss/README.md) | Python | `drop_protection_score` | Uses OpenRADIOSS 3D explicit FEA for multi-orientation 1.5 m smartphone drop protection |

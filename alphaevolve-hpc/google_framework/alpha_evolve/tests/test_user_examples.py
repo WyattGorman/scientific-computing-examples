@@ -46,6 +46,7 @@ FIVE_EXAMPLES = [
     "coronary_stent_openradioss",
     "eda_openroad_ppa_floorplan",
     "seismic_wave_propagation_stencil",
+    "f1_racecar_openfoam",
 ]
 
 
@@ -542,6 +543,8 @@ def test_drug_discovery_real_rdkit_3d_execution(monkeypatch):
   if str(exp_dir) in sys.path:
     sys.path.remove(str(exp_dir))
   sys.path.insert(0, str(exp_dir))
+  sys.modules.pop("src", None)
+  sys.modules.pop("src.docking_oracle", None)
 
   oracle_mod = _load_module_from_path(
       "docking_oracle_real", exp_dir / "src" / "docking_oracle.py"
@@ -783,6 +786,10 @@ def test_all_five_examples_visualization_and_postprocess(
           "seismic_wavefield_stencil_comparison.png",
           "seismic_wavefield_propagation.gif",
       ],
+      "f1_racecar_openfoam": [
+          "f1_aero_comparison.png",
+          "f1_aero_evolution.gif",
+      ],
   }
   for ex_name, assets in expected_assets.items():
     ex_dir = USER_EXAMPLES_DIR / ex_name
@@ -921,7 +928,44 @@ def test_all_five_examples_visualization_and_postprocess(
   assert seis_png.is_file() and seis_png.read_bytes().startswith(b"\x89PNG")
   assert seis_gif.is_file() and seis_gif.read_bytes().startswith(b"GIF8")
 
-  # 3. Verify postprocess(top_programs) across all 5 examples:
+  # (f) f1_racecar_openfoam (3D OpenFOAM PERRINN 2017 F1 example)
+  monkeypatch.setenv("ALPHAEVOLVE_F1_FORCE_SURROGATE", "1")
+  f1_dir = USER_EXAMPLES_DIR / "f1_racecar_openfoam"
+  if str(f1_dir) in sys.path:
+    sys.path.remove(str(f1_dir))
+  sys.path.insert(0, str(f1_dir))
+  for mod_key in (
+      "src",
+      "src.cfd",
+      "src.cfd.openfoam_f1_runner",
+      "src.geometry",
+      "src.geometry.perrinn_f1_stl",
+  ):
+    sys.modules.pop(mod_key, None)
+  f1_main = _load_module_from_path("f1_main_viz", f1_dir / "main.py")
+  f1_eval = _load_module_from_path("f1_eval_viz", f1_dir / "evaluator.py")
+  f1_eval.main = f1_main
+  cand_f1 = tmp_path / "cand_f1"
+  cand_f1.mkdir()
+  monkeypatch.setenv("_CANDIDATE_DIR", str(cand_f1))
+  f1_eval.evaluate()
+  assert (cand_f1 / "local_eval_run.json").is_file()
+  assert (cand_f1 / "f1_aero_metrics.json").is_file()
+  f1_payload = json.loads(
+      (cand_f1 / "local_eval_run.json").read_text(encoding="utf-8")
+  )
+  assert "neg_SCz_m2" in f1_payload and "components" in f1_payload
+  assert len(f1_payload["surface_polygons"]) > 50
+  f1_png = f1_eval.visualize_f1_aero_comparison(
+      output_path=tmp_path / "f1_out.png"
+  )
+  f1_gif = f1_eval.generate_f1_aero_evolution_gif(
+      output_path=tmp_path / "f1_out.gif"
+  )
+  assert f1_png.is_file() and f1_png.read_bytes().startswith(b"\x89PNG")
+  assert f1_gif.is_file() and f1_gif.read_bytes().startswith(b"GIF8")
+
+  # 3. Verify postprocess(top_programs) across all examples:
   #    - mocked GCS read_file_from_gcs + upload_to_gcs
   #    - fallback on missing/corrupted GCS JSON
   #    - empty top_programs no-op
@@ -934,6 +978,7 @@ def test_all_five_examples_visualization_and_postprocess(
       ("stent", stent_eval, cand_stent / "local_eval_run.json"),
       ("eda", eda_eval, cand_eda / "local_eval_run.json"),
       ("seis", seis_eval, cand_seis / "local_eval_run.json"),
+      ("f1", f1_eval, cand_f1 / "local_eval_run.json"),
   ]
   for label, mod, json_file in eval_modules:
     # Redirect SAMPLE_DIR to an isolated directory so static repo assets aren't overwritten
@@ -989,5 +1034,294 @@ def test_all_five_examples_visualization_and_postprocess(
     )
 
 
+def test_f1_racecar_openfoam_end_to_end_and_guardrails(
+    monkeypatch, tmp_path: Path
+):
+  """Verifies PERRINN 2017 F1 3D STL manifold, FIA 2017 guardrails, and polyMesh parser."""
+  if not USER_EXAMPLES_DIR.is_dir():
+    pytest.skip("user_examples directory not mounted in isolated container")
+  exp_dir = USER_EXAMPLES_DIR / "f1_racecar_openfoam"
+  monkeypatch.setenv("ALPHAEVOLVE_F1_FORCE_SURROGATE", "1")
+  if str(exp_dir) in sys.path:
+    sys.path.remove(str(exp_dir))
+  sys.path.insert(0, str(exp_dir))
+  for mod_key in (
+      "src",
+      "src.cfd",
+      "src.cfd.openfoam_f1_runner",
+      "src.geometry",
+      "src.geometry.perrinn_f1_stl",
+  ):
+    sys.modules.pop(mod_key, None)
 
+  main_mod = _load_module_from_path("f1_main", exp_dir / "main.py")
+  eval_mod = _load_module_from_path("f1_evaluator", exp_dir / "evaluator.py")
+  eval_mod.main = main_mod
+  runner = eval_mod.openfoam_f1_runner
+  stl_mod = _load_module_from_path(
+      "f1_stl_mod", exp_dir / "src" / "geometry" / "perrinn_f1_stl.py"
+  )
+
+  # 1. Seed baseline evaluation (-5.7525 due to 78.9% front aero balance & weak floor)
+  base_res = eval_mod.evaluate()
+  base_score = _extract_primary_score(base_res)
+  assert base_score == pytest.approx(-5.7525, abs=1e-2)
+
+  # 2. Evolved Gen 12 Champion setup (+1.8704, -SCz = 1.647 m^2, FB = 47.12%)
+  monkeypatch.setattr(
+      main_mod,
+      "design_f1_aero_package",
+      lambda bounds: dict(eval_mod.CHAMPION_F1_PARAMS),
+  )
+  champ_res = eval_mod.evaluate()
+  champ_score = _extract_primary_score(champ_res)
+  assert champ_score == pytest.approx(1.8704, abs=1e-2)
+  assert champ_score > base_score + 7.5
+
+  # 3. Unseen non-anchor interior setup exercises residual Shepard-Gaussian interpolation
+  unseen_params = {
+      "front_ride_height_mm": 24.5,
+      "rear_ride_height_mm": 74.0,
+      "diffuser_angle_deg": 15.3,
+      "diffuser_strake_height_mm": 47.0,
+      "fw_flap_angle_deg": 20.5,
+      "fw_outwash_toe_deg": 4.0,
+      "rw_aoa_deg": 33.5,
+      "sidepod_undercut_ratio": 0.29,
+  }
+  monkeypatch.setattr(
+      main_mod, "design_f1_aero_package", lambda bounds: dict(unseen_params)
+  )
+  unseen_score = _extract_primary_score(eval_mod.evaluate())
+  assert 0.5 < unseen_score < 2.2
+
+  # 4. FIA 2017 Technical Regulation & input-validation guardrails -> -100.0
+  illegal_cases = [
+      # (a) Plank bottoming (< 20.0 mm skid-block clearance)
+      dict(eval_mod.CHAMPION_F1_PARAMS, front_ride_height_mm=19.2),
+      # (b) Negative / flat rake (rear < front + 5.0 mm)
+      dict(
+          eval_mod.CHAMPION_F1_PARAMS,
+          front_ride_height_mm=44.0,
+          rear_ride_height_mm=46.0,
+      ),
+      # (c) FIA Art. 3.5.3 rear diffuser > 175.0 mm box ceiling
+      dict(eval_mod.CHAMPION_F1_PARAMS, diffuser_angle_deg=18.2),
+      # (d) Vortex strake ground scrape (< 15.0 mm clearance)
+      dict(
+          eval_mod.CHAMPION_F1_PARAMS,
+          front_ride_height_mm=21.0,
+          rear_ride_height_mm=48.0,
+          diffuser_strake_height_mm=50.0,
+      ),
+      # (e) V6 hybrid sidepod radiator duct starvation (< 0.088 m^2)
+      dict(eval_mod.CHAMPION_F1_PARAMS, sidepod_undercut_ratio=0.53),
+      # (f) Out-of-bounds parameter
+      dict(eval_mod.CHAMPION_F1_PARAMS, rw_aoa_deg=42.0),
+      # (g) NaN parameter
+      dict(eval_mod.CHAMPION_F1_PARAMS, fw_flap_angle_deg=float("nan")),
+      # (h) Missing required key
+      {
+          k: v
+          for k, v in eval_mod.CHAMPION_F1_PARAMS.items()
+          if k != "diffuser_angle_deg"
+      },
+  ]
+  for bad_p in illegal_cases:
+    monkeypatch.setattr(
+        main_mod, "design_f1_aero_package", lambda b, _p=bad_p: _p
+    )
+    assert _extract_primary_score(eval_mod.evaluate()) == -100.0
+
+  # Non-mapping return type
+  monkeypatch.setattr(main_mod, "design_f1_aero_package", lambda b: [1, 2, 3])
+  assert _extract_primary_score(eval_mod.evaluate()) == -100.0
+
+  # 5. Verify 6-solid 3D STL watertightness & OpenFOAM case dictionary generation
+  case_dir = tmp_path / "f1_case"
+  stl_stats = runner.write_openfoam_f1_case(
+      case_dir, eval_mod.CHAMPION_F1_PARAMS, geom_type="triSurface", end_time=150
+  )
+  assert stl_stats["total_triangles"] > 800
+  stl_file = case_dir / "constant" / "geometry" / "perrinn_f1.stl"
+  wt = stl_mod.verify_stl_watertight(stl_file)
+  assert wt["watertight"] is True
+  assert set(wt["solids"]) == {
+      "chassis",
+      "underbody",
+      "frontWing",
+      "rearWing",
+      "frontWheel",
+      "rearWheel",
+  }
+  assert (case_dir / "system" / "snappyHexMeshDict").is_file()
+  assert (case_dir / "constant" / "momentumTransport").is_file()
+  assert "149.2537" in (case_dir / "0" / "U").read_text(encoding="utf-8")
+
+  # Truncated STL should fail verify_stl_watertight
+  bad_stl = tmp_path / "broken.stl"
+  bad_stl.write_text(
+      "\n".join(stl_file.read_text(encoding="utf-8").splitlines()[:25]),
+      encoding="utf-8",
+  )
+  assert stl_mod.verify_stl_watertight(bad_stl)["watertight"] is False
+
+  # 6. Verify parse_polymesh_patch_forces on synthetic 1-cell hex polyMesh + fields
+  poly_case = tmp_path / "synth_poly"
+  (poly_case / "constant" / "polyMesh").mkdir(parents=True)
+  (poly_case / "200").mkdir(parents=True)
+  (poly_case / "constant" / "polyMesh" / "points").write_text(
+      "FoamFile { version 2.0; format ascii; class vectorField; object points; }\n"
+      "8\n(\n"
+      "(0 0 0)\n(1 0 0)\n(1 0.5 0)\n(0 0.5 0)\n"
+      "(0 0 0.2)\n(1 0 0.2)\n(1 0.5 0.2)\n(0 0.5 0.2)\n)\n",
+      encoding="utf-8",
+  )
+  # Include multi-line wrapped face syntax matching OpenFOAM >10-vertex formatting
+  (poly_case / "constant" / "polyMesh" / "faces").write_text(
+      "FoamFile { version 2.0; format ascii; class faceList; object faces; }\n"
+      "2\n(\n"
+      "4(0 3 2 1)\n"
+      "4(\n4 5 6 7\n)\n)\n",
+      encoding="utf-8",
+  )
+  (poly_case / "constant" / "polyMesh" / "owner").write_text(
+      "FoamFile { version 2.0; format ascii; class labelList; object owner; }\n"
+      "2\n(\n0\n0\n)\n",
+      encoding="utf-8",
+  )
+  (poly_case / "constant" / "polyMesh" / "neighbour").write_text(
+      "FoamFile { version 2.0; format ascii; class labelList; object neighbour; }\n"
+      "0\n(\n)\n",
+      encoding="utf-8",
+  )
+  (poly_case / "constant" / "polyMesh" / "boundary").write_text(
+      "FoamFile { version 2.0; format ascii; class polyBoundaryMesh; object boundary; }\n"
+      "2\n(\n"
+      "ground { type wall; nFaces 1; startFace 0; }\n"
+      "perrinn_f1_underbody { type wall; nFaces 1; startFace 1; }\n)\n",
+      encoding="utf-8",
+  )
+  # Negative kinematic pressure (-1200 m^2/s^2) in Venturi channel below z=0.2 floor -> suction downforce!
+  (poly_case / "200" / "p").write_text(
+      "FoamFile { object p; }\ninternalField nonuniform List<scalar> 1 ( -1200.0 );\n",
+      encoding="utf-8",
+  )
+  (poly_case / "200" / "U").write_text(
+      "FoamFile { object U; }\ninternalField uniform (45 0 0);\n",
+      encoding="utf-8",
+  )
+  (poly_case / "200" / "nut").write_text(
+      "FoamFile { object nut; }\ninternalField uniform 0.001;\n",
+      encoding="utf-8",
+  )
+  parsed = runner.parse_polymesh_patch_forces(poly_case, "200")
+  assert parsed["n_cells"] == 1
+  assert parsed["neg_SCz_m2"] > 0.5
+  assert parsed["SCx_m2"] > 0.0
+  assert "underbody" in parsed["components"]
+
+  # 7. Regression: OpenFOAM-14 vs ESI dictionary compatibility & tunnelSlip polyPatch
+  bm_text = (case_dir / "system" / "blockMeshDict").read_text(encoding="utf-8")
+  assert "tunnelSlip  { type patch;" in bm_text
+  assert "type slip;" not in bm_text
+  snappy_of14 = (case_dir / "system" / "snappyHexMeshDict").read_text(
+      encoding="utf-8"
+  )
+  assert "type box;" in snappy_of14
+  assert "level 3;" in snappy_of14
+  assert "insidePoint (1.5 2.0 2.0);" in snappy_of14
+
+  case_esi = tmp_path / "f1_case_esi"
+  runner.write_openfoam_f1_case(
+      case_esi,
+      eval_mod.CHAMPION_F1_PARAMS,
+      geom_type="triSurfaceMesh",
+      end_time=150,
+  )
+  snappy_esi = (case_esi / "system" / "snappyHexMeshDict").read_text(
+      encoding="utf-8"
+  )
+  assert "type searchableBox;" in snappy_esi
+  assert "levels ((1E15 3));" in snappy_esi
+  assert "locationInMesh (1.5 2.0 2.0);" in snappy_esi
+
+  # 8. Regression: highest cell index appearing ONLY in neighbour (owner.max() < neigh.max())
+  poly2 = tmp_path / "synth_poly_2cell"
+  (poly2 / "constant" / "polyMesh").mkdir(parents=True)
+  (poly2 / "200").mkdir(parents=True)
+  (poly2 / "constant" / "polyMesh" / "points").write_text(
+      "FoamFile { version 2.0; format ascii; class vectorField; object points; }\n"
+      "12\n(\n"
+      "(0 0 0)\n(1 0 0)\n(1 0.5 0)\n(0 0.5 0)\n"
+      "(0 0 0.1)\n(1 0 0.1)\n(1 0.5 0.1)\n(0 0.5 0.1)\n"
+      "(0 0 0.2)\n(1 0 0.2)\n(1 0.5 0.2)\n(0 0.5 0.2)\n)\n",
+      encoding="utf-8",
+  )
+  (poly2 / "constant" / "polyMesh" / "faces").write_text(
+      "FoamFile { version 2.0; format ascii; class faceList; object faces; }\n"
+      "3\n(\n"
+      "4(4 5 6 7)\n"
+      "4(0 3 2 1)\n"
+      "4(8 9 10 11)\n)\n",
+      encoding="utf-8",
+  )
+  # Face 0 is internal: owner=0, neighbour=1; boundary faces 1,2 also owned by cell 0 -> owner.max()=0 < neigh.max()=1
+  (poly2 / "constant" / "polyMesh" / "owner").write_text(
+      'FoamFile { version 2.0; format ascii; class labelList; note "nPoints:12 nCells:2 nFaces:3 nInternalFaces:1"; object owner; }\n'
+      "3\n(\n0\n0\n0\n)\n",
+      encoding="utf-8",
+  )
+  (poly2 / "constant" / "polyMesh" / "neighbour").write_text(
+      "FoamFile { version 2.0; format ascii; class labelList; object neighbour; }\n"
+      "1\n(\n1\n)\n",
+      encoding="utf-8",
+  )
+  (poly2 / "constant" / "polyMesh" / "boundary").write_text(
+      "FoamFile { version 2.0; format ascii; class polyBoundaryMesh; object boundary; }\n"
+      "2\n(\n"
+      "ground { type wall; nFaces 1; startFace 1; }\n"
+      "perrinn_f1_underbody { type wall; nFaces 1; startFace 2; }\n)\n",
+      encoding="utf-8",
+  )
+  (poly2 / "200" / "p").write_text(
+      "FoamFile { object p; }\ninternalField nonuniform List<scalar> 2 ( -1100.0 -900.0 );\n",
+      encoding="utf-8",
+  )
+  (poly2 / "200" / "U").write_text(
+      "FoamFile { object U; }\ninternalField uniform (45 0 0);\n",
+      encoding="utf-8",
+  )
+  (poly2 / "200" / "nut").write_text(
+      "FoamFile { object nut; }\ninternalField uniform 0.001;\n",
+      encoding="utf-8",
+  )
+  parsed2 = runner.parse_polymesh_patch_forces(poly2, "200")
+  assert parsed2["n_cells"] == 2
+  assert parsed2["neg_SCz_m2"] > 0.4
+
+  # 9. Regression: exact FIA Art. 3.5.3 diffuser ceiling (16.44 deg legal vs 16.45 deg rejected) & extreme legal corner watertightness
+  legal_edge = dict(
+      front_ride_height_mm=20.0,
+      rear_ride_height_mm=95.0,
+      diffuser_angle_deg=16.44,
+      diffuser_strake_height_mm=80.0,
+      fw_flap_angle_deg=28.0,
+      fw_outwash_toe_deg=12.0,
+      rw_aoa_deg=38.0,
+      sidepod_undercut_ratio=0.479,
+  )
+  monkeypatch.setattr(
+      main_mod, "design_f1_aero_package", lambda b: dict(legal_edge)
+  )
+  assert _extract_primary_score(eval_mod.evaluate()) > -50.0
+  edge_stl = tmp_path / "edge_corner.stl"
+  stl_mod.build_perrinn_f1_stl(legal_edge, edge_stl)
+  assert stl_mod.verify_stl_watertight(edge_stl)["watertight"] is True
+
+  illegal_1645 = dict(legal_edge, diffuser_angle_deg=16.45)
+  monkeypatch.setattr(
+      main_mod, "design_f1_aero_package", lambda b: dict(illegal_1645)
+  )
+  assert _extract_primary_score(eval_mod.evaluate()) == -100.0
 

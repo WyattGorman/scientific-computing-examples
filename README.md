@@ -46,6 +46,7 @@ Here is a curated list of examples from different domains:
   - [Semiconductor EDA — OpenROAD TritonRoute (`drt`) Adaptive Detailed Routing Schedule (`openroad_drt_schedule`)](alphaevolve-hpc/user_examples/openroad_drt_schedule/README.md)
   - [Energy & Subsurface Geoscience — 2D Marmousi-II & Sub-Salt Seismic Wave Propagation DRP Stencil (`seismic_wave_propagation_stencil`)](alphaevolve-hpc/user_examples/seismic_wave_propagation_stencil/README.md)
   - [Aerospace & Thermal CFD — OpenFOAM-14 2D Airfoil, Supersonic Rocket Nozzle & 3D Liquid-Cooling Cold-Plate (`airfoil_openfoam`, `rocket_nozzle_openfoam`, `heatsink_openfoam`)](alphaevolve-hpc/user_examples/heatsink_openfoam/README.md)
+  - [Motorsport External Aerodynamics CFD — 3D PERRINN 2017 Formula 1 Ground-Effect Floor, Outwash & Wing Evolution in OpenFOAM-14 (`f1_racecar_openfoam`)](alphaevolve-hpc/user_examples/f1_racecar_openfoam/README.md)
   - [Structural Impact FEA — OpenRADIOSS Wing Bird-Strike & Smartphone Drop Test (`bird_strike_wing`, `cell_phone_drop_openradioss`)](alphaevolve-hpc/user_examples/bird_strike_wing/README.md)
 - **Apptainer:**
   - [Building Apptainer (SIF) Images on Google Cloud](apptainer/builders/README.md)
