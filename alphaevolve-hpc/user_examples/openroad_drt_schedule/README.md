@@ -49,6 +49,16 @@ The primary metric `routing_qor_score` combines Design Rule Violation (`DRV`) co
 
 ---
 
+## Baseline vs. Evolved `TritonRoute` (`drt`) Schedule Visualization
+
+![OpenROAD Detailed Routing Schedule Comparison](openroad_drt_comparison.png)
+
+![OpenROAD Detailed Routing Closed-Loop Evolution](openroad_drt_evolution.gif)
+
+- **Closed-Loop DRV Convergence vs. Stock `DEFAULT` Schedule**: Compares per-iteration Design Rule Violation (`DRV`) clearance on congested `ISPD-18` / `ISPD-19` benchmarks, showing how the evolved adaptive `next_step(it, drvs, history)` schedule dynamically escalates search-box geometry, rip-up mode (`DRC` / `NEARDRC` / `ALL`), and marker-decay costs upon stagnation while reaching `0` DRC violations with up to **2.1× faster Search-and-Repair turnaround** and preserved routed wirelength/via QoR.
+
+---
+
 ## Details
 
 - **Optimization Goal**: Evolve a scale-invariant closed-loop detailed routing schedule `next_step(it, drvs, history)` that accelerates `TritonRoute` (`drt`) convergence across diverse chip designs while achieving `0` DRC violations and preserving routed wirelength and via count.

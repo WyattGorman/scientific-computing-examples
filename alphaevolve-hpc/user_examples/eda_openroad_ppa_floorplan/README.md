@@ -20,6 +20,8 @@ In hierarchical ASIC physical design, hard SRAM macro placement (`(x_um, y_um, o
 
 ![OpenROAD 7nm ASAP7 Macro Floorplan & PPA Comparison](openroad_floorplan_ppa_comparison.png)
 
+![OpenROAD 7nm ASAP7 Macro Floorplan & PPA Evolution](openroad_floorplan_evolution.gif)
+
 - **Panel (A) — Baseline 2-Column Macro Grid (`ppa_composite_score = -130.29`)**: Places `SRAM_ICACHE_1`, `SRAM_DCACHE_1`, `SRAM_NPU_WT_1`, and `SRAM_L2_BANK_0` at `x = 520 um` directly across the central `TritonCTS` clock spine (`x in [380, 820] um`) overlaid on the 24x24 `FastRoute` GCell congestion heatmap, fragmenting the standard-cell core, adding `+104.0 ps` of clock-spine blockage skew, and causing severe setup violations (`Worst WNS = -64.7 ps`, `Total TNS = -647.6 ps`).
 - **Panel (B) — Champion Evolved Perimeter-Banked Floorplan (`ppa_composite_score = +9.32`)**: Banks the CPU instruction/data cache SRAMs along the West perimeter (`x = 34 um`, `R0` with East-facing M4 pins) and the NPU weight/activation/L2 SRAMs along the East perimeter (`x = 936..966 um`, flipped to `MY` so active M4 signal pins face West into the interior core channel) overlaid on the 24x24 GCell congestion heatmap, clearing the central standard-cell sea and eliminating clock-spine blockage (`0.0 ps` penalty).
 - **Panel (C) — 24x24 GCell `FastRoute` RUDY Congestion Maps**: Shows routing demand/supply utilization across the `[20, 20, 1180, 1180] um` core, where the perimeter-banked champion eliminates central M2–M5 macro routing detours (`Max GCell Util = 2.48 -> 1.09`, `Overflow = 94.2 -> 4.5`).

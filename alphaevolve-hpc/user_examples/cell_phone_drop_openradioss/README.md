@@ -74,6 +74,12 @@ $$\text{Score} = 0.55 \cdot S_{\text{corner}} + 0.45 \cdot S_{\text{slap}} - 12.
 
 ## Baseline vs. Evolved Multi-Orientation Drop Performance (`wg-hpc-demos` Cloud Batch Run)
 
+![Cell Phone Drop Stress Comparison](phone_drop_stress_comparison.png)
+
+![Cell Phone Drop Evolution & Multi-Orientation Impact](phone_drop_evolution.gif)
+
+![Cell Phone Drop Time-History Response Comparison](phone_drop_response_comparison.png)
+
 | Metric | Baseline Unprotected Phone | AlphaEvolve Best (`11073173235359591630`) | Improvement |
 | :--- | :--- | :--- | :--- |
 | **`drop_protection_score`** | **`55.92`** | **`136.90`** | **`+144.8%` (2.45x)** |

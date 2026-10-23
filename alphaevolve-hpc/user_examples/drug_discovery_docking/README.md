@@ -20,6 +20,8 @@ This benchmark implements a **two-stage 3D physics and medicinal chemistry evalu
 
 ![3D Structure-Based Drug Discovery Pose & MPO Comparison](docking_pose_and_mpo_comparison.png)
 
+![3D Structure-Based Drug Discovery Scaffold-Hopping & Pose Evolution](docking_evolution.gif)
+
 - **Panel A (Primary Target — KRAS G12D Switch-II Pocket, PDB: 7RPZ)**: Renders the 3D receptor pocket heavy atoms, pharmacophore anchors (`Asp12_OD1`/`OD2` anionic carboxylate, `Gly60_HN`/`Lys16_NZ` H-bond donors, `Gln61_OE1` H-bond acceptor, `Tyr64`/`Val9`/`Met72` hydrophobic sub-pocket), and the 3D `SE(3)` docked pose of the evolved piperazine-quinazoline lead (`Fc1ccc2ccccc2c1c3nc(N4CCNCC4)nc5ccccc35`, $\Delta G_{\text{Vina}} = -9.69\text{ kcal/mol}$) forming bidentate salt-bridge vectors with `Asp12`.
 - **Panel B (Held-Out Generalization Target — EGFR T790M Gatekeeper Pocket, PDB: 3IKA)**: Shows the evolved pocket-conditioned anilinoquinazoline lead (`COc1cc2ncnc(Nc3ccc(F)c(Cl)c3)c2cc1OCCN4CCOCC4`, $\Delta G_{\text{Vina}} = -9.85\text{ kcal/mol}$) adapting to the kinase hinge H-bond anchors (`Met793_NH`, `Gln791_O`) and the bulky `Met790` gatekeeper pocket.
 - **Panel C (2D RDKit Chemical Structures & Lead Properties)**: Compares 2D chemical structures (`AllChem.Compute2DCoords`), Vina binding free energies, QED drug-likeness, Ertl `SA_Score`, and MMFF94s internal torsional strain between the unconditioned baseline fragment and the target-conditioned KRAS G12D / EGFR T790M champion leads.

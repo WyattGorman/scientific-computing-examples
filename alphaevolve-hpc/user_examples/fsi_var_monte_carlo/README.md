@@ -22,6 +22,8 @@ flowchart LR
 
 ![FRTB 99.9% Tail-Risk VaR & CVaR Monte Carlo Comparison](var_cvar_tail_comparison.png)
 
+![FRTB Tail-Risk Monte Carlo Evolution](var_cvar_evolution.gif)
+
 - **Panel A (4-Regime 99.0% VaR & 99.9% CVaR Unbiasedness vs. Gold Reference)**: Compares the 10-day 99.9% Expected Shortfall ($\text{CVaR}_{0.999}$) and 99.0% Value-at-Risk ($\text{VaR}_{0.99}$) across all 4 market stress regimes (`R0: Normal Market`, `R1: 2008 Crash`, `R2: 2020 Vol Spike`, `R3: Held-Out Stress`) against the 2.1M-path Gold Reference, showing unbiased convergence with $\pm 1.96\text{ SE}$ confidence intervals collapsed by $>7.5\times$.
 - **Panel B (Girsanov Importance Sampling Tail Shift)**: Shows how the evolved defensive 2-component Girsanov measure $\mathbb{Q}(\mathbf{Z})$ tilts sampling density along the systemic portfolio loss direction into the $\ge 99.9\%$ loss tail while preserving exact Radon-Nikodym likelihood-ratio unbiasedness.
 - **Panel C (Estimator Variance Reduction Ratio by Stress Regime)**: Demonstrates **$49\times$ to $64\times$ variance reduction** ($\text{VRR} = (\text{SE}_{\text{base}} / \text{SE}_{\text{evolved}})^2$) across all four correlation/volatility regimes via Girsanov IS combined with zero-mean second-order Delta–Gamma control variates.

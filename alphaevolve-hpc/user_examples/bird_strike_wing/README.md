@@ -78,7 +78,13 @@ where:
 
 ![Internal Structure Comparison](wing_internal_structure_comparison.png)
 
+![Bird Strike Evolutionary Progression](wing_evolution_progression.gif)
+
 ![Bird Strike Impact Comparison](wing_bird_strike_impact_comparison.gif)
+
+![Bird Strike Response Comparison](bird_strike_response_comparison.png)
+
+![Deformed Cross-Section Comparison](wing_deformed_cross_section_comparison.png)
 
 | Metric | Baseline Seed Design | 30-Eval Unconstrained (`6415289212925006118`) | 500-Eval Low-Strain (`18347822813496773660`) | Improvement (500-Eval vs. Seed) |
 | :--- | :--- | :--- | :--- | :--- |
