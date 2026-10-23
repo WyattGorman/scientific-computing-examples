@@ -21,8 +21,15 @@ import sys
 
 import nest_asyncio
 
-# Add container project root to sys.path
-sys.path.append("/app/src")
+THIS_FILE_DIR = Path(__file__).absolute().parent
+for _cand_src in (
+    Path("/app/src"),
+    THIS_FILE_DIR.parents[1] / "google_framework",
+):
+  if _cand_src.is_dir() and str(_cand_src) not in sys.path:
+    sys.path.insert(0, str(_cand_src))
+if str(THIS_FILE_DIR) not in sys.path:
+  sys.path.insert(0, str(THIS_FILE_DIR))
 
 from alpha_evolve import AlphaEvolveController, get_score  # pylint: disable=g-import-not-at-top
 from alpha_evolve.models import parse_models_from_env  # pylint: disable=g-import-not-at-top
@@ -32,14 +39,18 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ID = os.getenv("_PROJECT_ID", "gcp-project-id")
 BUCKET_NAME = os.getenv("_CLOUD_BUCKET_NAME", "my-bucket-name")
-MODEL = os.getenv("_MODEL", "GEMINI_V3P5_FLASH")
+_RAW_MODEL = (os.getenv("_MODEL") or "").strip()
+MODEL = (
+    "GEMINI_V3P5_FLASH"
+    if not _RAW_MODEL or _RAW_MODEL == "MODEL_UNSPECIFIED"
+    else _RAW_MODEL
+)
 REGION_CODE = os.getenv("_REGION_CODE", "global")
 MAX_PROGRAMS_GENERATED = int(os.getenv("_MAX_PROGRAMS_GENERATED") or "24")
 CONCURRENCY = int(os.getenv("_CONCURRENCY") or "4")
 MAX_DURATION = int(os.getenv("_MAX_DURATION") or "6")
 IDLE_TIMEOUT = int(os.getenv("_IDLE_TIMEOUT") or "5")
 
-THIS_FILE_DIR = Path(__file__).absolute().parent
 INITIAL_MAIN_PY = (THIS_FILE_DIR / "main.py").read_text(encoding="utf-8")
 
 

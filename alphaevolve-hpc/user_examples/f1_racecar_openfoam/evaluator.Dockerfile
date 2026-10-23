@@ -59,7 +59,7 @@ RUN uv pip install --require-hashes -r requirements.txt
 
 # Copy core framework library
 COPY google_framework/alpha_evolve /app/src/alpha_evolve
-ENV PYTHONPATH="/app/src:${PYTHONPATH:-}"
+ENV PYTHONPATH="/app/src:/app/src/alpha_evolve:${PYTHONPATH:-}"
 
 ARG CLOUD_BUCKET_NAME
 ARG PROJECT_ID
@@ -87,5 +87,16 @@ RUN (userdel -r ubuntu 2>/dev/null || true) && \
 WORKDIR /app/src/alpha_evolve
 USER evaluser
 
-# Universal platform runner entrypoint (preserves Cloud Batch retry/failure exit codes)
-ENTRYPOINT ["python", "-m", "alpha_evolve.runner"]
+# Supports unified alpha_evolve.runner (CitC) and standalone cloud_evaluator.py (GitHub)
+ENTRYPOINT ["/bin/bash", "-c", "\
+    if [ -f /app/src/alpha_evolve/runner.py ]; then \
+      exec python -m alpha_evolve.runner \"$@\"; \
+    else \
+      echo \"[BATCH DEBUG] Container started for Program ID: $_CANDIDATE_PROGRAM_ID\" && \
+      mkdir -p \"${_MOUNT_PATH:-/tmp}/${_USER_EXPERIMENT_NAME:-f1-racecar-openfoam}/logs\" && \
+      if [ -n \"${_CANDIDATE_DIR:-}\" ] && [ -d \"$_CANDIDATE_DIR\" ]; then \
+        cp -r \"$_CANDIDATE_DIR\"/* /app/experiment/ 2>/dev/null || true; \
+      fi && \
+      make -C /app/experiment all && \
+      exec bash /app/experiment/evaluator.sh; \
+    fi", "--"]

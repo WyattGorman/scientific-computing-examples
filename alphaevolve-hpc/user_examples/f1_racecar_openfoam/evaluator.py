@@ -189,6 +189,14 @@ def evaluate(eval_inputs: Mapping[str, Any] | None = None) -> dict[str, Any]:
   scx = float(sim["SCx_m2"])
   l_over_d = float(sim["L_over_D"])
   fb = float(sim["front_aero_balance"])
+  if not all(
+      math.isfinite(v) for v in (lap_score, neg_scz, scx, l_over_d, fb)
+  ):
+    return _build_eval(
+        -100.0,
+        "FIA_LEGALITY_OR_CFD_VIOLATION",
+        "Non-finite aerodynamic metric returned by CFD evaluation.",
+    )
   n_cells = int(sim["n_cells"])
   comps = sim["components"]
   leg = sim["legality"]
@@ -206,7 +214,7 @@ def evaluate(eval_inputs: Mapping[str, Any] | None = None) -> dict[str, Any]:
       }
       cand_path = Path(candidate_dir)
       cand_path.mkdir(parents=True, exist_ok=True)
-      serialized = json.dumps(payload, indent=2)
+      serialized = json.dumps(payload, indent=2, allow_nan=False)
       (cand_path / f"{program_name}.json").write_text(
           serialized, encoding="utf-8"
       )
@@ -615,19 +623,28 @@ def visualize_f1_aero_comparison(
   ax1.axvspan(0.35, 3.25, color="#eef2ff", alpha=0.42, label="Venturi Underfloor Throat")
   ax1.axvspan(3.25, 3.92, color="#fef3c7", alpha=0.42, label="FIA 175 mm Diffuser & Rear Wing")
 
+  base_floor_scz = float(base["components"]["underbody"]["neg_SCz_m2"])
+  evol_floor_scz = float(evol["components"]["underbody"]["neg_SCz_m2"])
+  floor_mult = evol_floor_scz / max(base_floor_scz, 1e-6)
+  evol_params = evol.get("parameters", CHAMPION_F1_PARAMS)
+  evol_diff_deg = float(evol_params.get("diffuser_angle_deg", 16.15))
+
   ax1.plot(
       cp_x,
       base_neg_cp,
       "k--",
       lw=2.0,
-      label=f"Gen 0 Seed Suction -Cp(x) (Floor -SCz = {base['components']['underbody']['neg_SCz_m2']:.2f} m²)",
+      label=f"Gen 0 Seed Suction -Cp(x) (Floor -SCz = {base_floor_scz:.2f} m²)",
   )
   ax1.plot(
       cp_x,
       evol_neg_cp,
       color="#1d4ed8",
       lw=2.6,
-      label=f"Gen 12 Champion Suction -Cp(x) (Floor -SCz = {evol['components']['underbody']['neg_SCz_m2']:.2f} m², 5.5×)",
+      label=(
+          f"Gen 12 Champion Suction -Cp(x) (Floor -SCz = {evol_floor_scz:.2f} m², "
+          f"{floor_mult:.1f}×)"
+      ),
   )
   ax1.fill_between(
       cp_x,
@@ -645,8 +662,9 @@ def visualize_f1_aero_comparison(
   z_base_mm = _floor_and_diffuser_box_mm(
       base.get("parameters", BASELINE_F1_PARAMS), x_dense
   )
-  z_evol_mm = _floor_and_diffuser_box_mm(
-      evol.get("parameters", CHAMPION_F1_PARAMS), x_dense
+  z_evol_mm = _floor_and_diffuser_box_mm(evol_params, x_dense)
+  evol_box_mm = float(
+      evol.get("legality", {}).get("diffuser_box_height_mm", z_evol_mm[-1])
   )
   ax1_twin.plot(
       x_dense,
@@ -662,7 +680,10 @@ def visualize_f1_aero_comparison(
       color="#15803d",
       ls="-.",
       lw=2.1,
-      label="Gen 12 Raked Venturi + 16.15° Diffuser (172 mm)",
+      label=(
+          f"Gen 12 Raked Venturi + {evol_diff_deg:.2f}° Diffuser "
+          f"({evol_box_mm:.0f} mm)"
+      ),
   )
   ax1_twin.axhline(
       175.0,
@@ -770,10 +791,15 @@ def visualize_f1_aero_comparison(
         color="#475569",
     )
 
+  evol_fb_note = (
+      "Inside Neutral Window"
+      if abs(evol_fb - 44.5) <= 2.8
+      else "Outside Neutral Window"
+  )
   balance_callout = (
       "Longitudinal Pitch Stability (Target: 44.5% ± 2.8%)\n"
       f"• Gen 0 Seed:     FB = {base_fb:.1f}%  (Snap-Oversteer Penalty)\n"
-      f"• Gen 12 Champ:  FB = {evol_fb:.1f}%  (Inside Neutral Window)"
+      f"• Gen 12 Champ:  FB = {evol_fb:.1f}%  ({evol_fb_note})"
   )
   ax2.text(
       0.98,
@@ -935,7 +961,6 @@ def generate_f1_aero_evolution_gif(
   from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # pylint: disable=g-import-not-at-top
   from PIL import Image  # pylint: disable=g-import-not-at-top
 
-  del baseline_data, evolved_data
   if output_path is None:
     output_path = SAMPLE_DIR / "f1_aero_evolution.gif"
   out_path = Path(output_path)
@@ -949,9 +974,23 @@ def generate_f1_aero_evolution_gif(
   tri_stride = 8 if is_unit_test else 1
 
   history = _load_history()
-  milestones = history["generation_milestones"]
+  milestones = [dict(m) for m in history["generation_milestones"]]
   all_cands = history["all_evaluated_candidates"]
   meshes = history["surface_cp_meshes"]
+
+  for target_idx, custom_data in ((0, baseline_data), (-1, evolved_data)):
+    if (
+        isinstance(custom_data, Mapping)
+        and "parameters" in custom_data
+        and "components" in custom_data
+    ):
+      merged = dict(milestones[target_idx])
+      merged.update(custom_data)
+      if "f1_aero_lap_score" not in custom_data and "score" in custom_data:
+        merged["f1_aero_lap_score"] = float(custom_data["score"])
+      if "program_name" in custom_data and "candidate_id" not in custom_data:
+        merged["candidate_id"] = str(custom_data["program_name"])
+      milestones[target_idx] = merged
 
   ms0 = milestones[0]
   ms_gens = [int(m["generation"]) for m in milestones]
@@ -984,7 +1023,9 @@ def generate_f1_aero_evolution_gif(
     ld_now = float(ms["L_over_D"])
     fb_now = float(ms["front_aero_balance"]) * 100.0
 
-    if gen == 0:
+    if ms.get("surface_polygons"):
+      raw_mesh = ms["surface_polygons"]
+    elif gen == 0:
       raw_mesh = meshes["baseline_gen0"]
     elif gen < 8:
       raw_mesh = meshes["mid_gen4"]

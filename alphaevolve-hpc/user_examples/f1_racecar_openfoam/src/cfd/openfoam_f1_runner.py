@@ -43,6 +43,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from src.geometry.perrinn_f1_stl import (
+    EXPECTED_SOLIDS,
     REQUIRED_PARAMETERS,
     build_perrinn_f1_stl,
     compute_fia_legality_metrics,
@@ -808,6 +809,14 @@ def parse_polymesh_patch_forces(
   p_kin = _read_scalar(t_dir / "p", 0.0)
   u_cell = _read_vector(t_dir / "U")
   nut_cell = _read_scalar(t_dir / "nut", 0.0)
+  if (
+      not np.all(np.isfinite(p_kin))
+      or not np.all(np.isfinite(u_cell))
+      or not np.all(np.isfinite(nut_cell))
+  ):
+    raise ValueError(
+        f"Non-finite field values (NaN/Inf) detected in OpenFOAM time directory {t_dir}"
+    )
   n_cells = max(n_cells, len(p_kin), len(u_cell), len(nut_cell))
 
   cell_pts_sum = np.zeros((n_cells, 3))
@@ -829,12 +838,16 @@ def parse_polymesh_patch_forces(
 
   total_f = np.zeros(3)
   total_m = np.zeros(3)
-  components: Dict[str, Dict[str, float]] = {}
+  components: Dict[str, Dict[str, float]] = {
+      solid: {"SCx_m2": 0.0, "neg_SCz_m2": 0.0} for solid in EXPECTED_SOLIDS
+  }
   surface_polys: List[Dict[str, Any]] = []
+  car_patch_faces = 0
 
   for pname, (sf, nf) in patches.items():
     if not pname.startswith("perrinn_f1_"):
       continue
+    car_patch_faces += int(nf)
     fp = np.zeros(3)
     fv = np.zeros(3)
     mp = np.zeros(3)
@@ -943,6 +956,7 @@ def parse_polymesh_patch_forces(
 
   return {
       "n_cells": n_cells,
+      "car_patch_faces": car_patch_faces,
       "neg_SCz_m2": round(neg_scz_m2, 4),
       "SCx_m2": round(scx_m2, 4),
       "L_over_D": round(l_over_d, 4),
@@ -1159,6 +1173,7 @@ def evaluate_f1_aero_cfd(
             capture_output=True,
             text=True,
             check=False,
+            timeout=60,
         )
         if sc_proc.returncode != 0 or "Surface is closed" not in sc_proc.stdout:
           return {
@@ -1175,6 +1190,7 @@ def evaluate_f1_aero_cfd(
           check=True,
           capture_output=True,
           text=True,
+          timeout=90,
       )
       snappy_cmd = (
           [backend["snappy"]]
@@ -1188,6 +1204,7 @@ def evaluate_f1_aero_cfd(
           check=True,
           capture_output=True,
           text=True,
+          timeout=240,
       )
       subprocess.run(
           backend["solver_cmd"],
@@ -1196,6 +1213,7 @@ def evaluate_f1_aero_cfd(
           check=True,
           capture_output=True,
           text=True,
+          timeout=420,
       )
       time_dirs = sorted([
           int(d.name)
@@ -1212,6 +1230,29 @@ def evaluate_f1_aero_cfd(
       cfd_res = parse_polymesh_patch_forces(
           work_dir, str(time_dirs[-1]), export_surface_polygons=True
       )
+      if cfd_res.get("car_patch_faces", 0) <= 0:
+        return {
+            "valid": False,
+            "reason": "snappyHexMesh produced zero snapped F1 car patch faces.",
+            "f1_aero_lap_score": -100.0,
+            "solver_backend": backend["distribution"],
+        }
+      if (
+          not math.isfinite(cfd_res["neg_SCz_m2"])
+          or not math.isfinite(cfd_res["SCx_m2"])
+          or not math.isfinite(cfd_res["front_aero_balance"])
+          or not (-10.0 <= cfd_res["neg_SCz_m2"] <= 20.0)
+          or not (0.10 <= cfd_res["SCx_m2"] <= 20.0)
+      ):
+        return {
+            "valid": False,
+            "reason": (
+                "OpenFOAM RANS solution diverged outside physical aero bounds "
+                f"(-SCz={cfd_res['neg_SCz_m2']}, SCx={cfd_res['SCx_m2']})."
+            ),
+            "f1_aero_lap_score": -100.0,
+            "solver_backend": backend["distribution"],
+        }
       solver_name = backend["distribution"]
     else:
       cfd_res = _evaluate_calibrated_3d_rans_surrogate(clean_params, spec)
@@ -1254,9 +1295,26 @@ def evaluate_f1_aero_cfd(
         "surface_polygons": cfd_res["surface_polygons"],
     }
   except subprocess.CalledProcessError as exc:
+    out_tail = ((exc.stdout or "") + "\n" + (exc.stderr or "")).strip()[-300:]
     return {
         "valid": False,
-        "reason": f"OpenFOAM command failed ({exc.cmd}): {(exc.stderr or '')[-300:]}",
+        "reason": f"OpenFOAM command failed ({exc.cmd}): {out_tail}",
+        "f1_aero_lap_score": -100.0,
+        "solver_backend": backend["distribution"] if backend else "openfoam",
+    }
+  except subprocess.TimeoutExpired as exc:
+    return {
+        "valid": False,
+        "reason": (
+            f"OpenFOAM command timed out after {exc.timeout}s ({exc.cmd})."
+        ),
+        "f1_aero_lap_score": -100.0,
+        "solver_backend": backend["distribution"] if backend else "openfoam",
+    }
+  except ValueError as exc:
+    return {
+        "valid": False,
+        "reason": f"OpenFOAM field/mesh validation failed: {exc}",
         "f1_aero_lap_score": -100.0,
         "solver_backend": backend["distribution"] if backend else "openfoam",
     }

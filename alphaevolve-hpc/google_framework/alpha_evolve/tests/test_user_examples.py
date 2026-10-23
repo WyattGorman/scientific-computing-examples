@@ -15,17 +15,67 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 from typing import Any
 import pytest
 import yaml
 
-from alpha_evolve.runner import (
-    build_initial_program_payload,
-    load_experiment_spec,
-)
+try:
+  from alpha_evolve.runner import (
+      build_initial_program_payload,
+      load_experiment_spec,
+  )
+except ImportError:
+
+  def load_experiment_spec(exp_dir: Path) -> dict[str, Any]:
+    config_path = exp_dir / "experiment.yaml"
+    with open(config_path, "r", encoding="utf-8") as f:
+      spec = yaml.safe_load(f)
+    if not isinstance(spec, dict):
+      raise ValueError(f"Invalid experiment.yaml format in {config_path}")
+    required = [
+        "title",
+        "problem_description",
+        "program_language",
+        "primary_metric",
+        "seed_files",
+        "evaluator",
+    ]
+    missing = [k for k in required if k not in spec]
+    if missing:
+      raise ValueError(f"Missing required fields in {config_path}: {missing}")
+    return spec
+
+  def build_initial_program_payload(
+      exp_dir: Path, spec: dict[str, Any]
+  ) -> dict[str, Any]:
+    files_payload: list[dict[str, str]] = []
+    for rel_path in spec["seed_files"]:
+      norm_p = Path(rel_path)
+      if norm_p.is_absolute() or ".." in norm_p.parts:
+        raise ValueError(f"Invalid seed file path: {rel_path}")
+      full_p = (exp_dir / norm_p).resolve()
+      if not full_p.is_relative_to(exp_dir.resolve()):
+        raise ValueError(f"Seed file escapes experiment root: {rel_path}")
+      files_payload.append({
+          "path": rel_path,
+          "content": full_p.read_text(encoding="utf-8"),
+      })
+    return {
+        "content": {"files": files_payload},
+        "evaluation": {
+            "scores": {
+                "scores": [{
+                    "metric": spec["primary_metric"],
+                    "score": float(spec.get("initial_score", 0.0)),
+                }]
+            }
+        },
+    }
 
 def _resolve_user_examples_dir() -> Path:
   candidates = [
@@ -553,6 +603,8 @@ def test_drug_discovery_real_rdkit_3d_execution(monkeypatch):
       exp_dir / "models" / "egfr_t790m_pocket.json"
   )
   oracle = oracle_mod.DockingOracle(pocket)
+  if not os.environ.get("TEST_SRCDIR") and not oracle._has_rdkit:
+    pytest.skip("RDKit not installed in standalone controller environment")
   assert oracle._has_rdkit is True
 
   valid_res = oracle.evaluate_smiles(
@@ -687,6 +739,8 @@ def test_eda_openroad_real_binary_execution():
     runner = _load_module_from_path(
         "src.openroad_runner", exp_dir / "src" / "openroad_runner.py"
     )
+  if not os.environ.get("TEST_SRCDIR") and runner.find_openroad_binary() is None:
+    pytest.skip("openroad_headless not installed in standalone controller environment")
   assert runner.find_openroad_binary() is not None
   assert runner.find_asap7_pdk_dir() is not None
 
@@ -1324,4 +1378,121 @@ def test_f1_racecar_openfoam_end_to_end_and_guardrails(
       main_mod, "design_f1_aero_package", lambda b: dict(illegal_1645)
   )
   assert _extract_primary_score(eval_mod.evaluate()) == -100.0
+
+  # 10. Regression: partial-patch polyMesh still populates all 6 EXPECTED_SOLIDS
+  #     keys and renders custom evolved_data in PNG + GIF without KeyError
+  assert set(parsed["components"].keys()) == set(stl_mod.EXPECTED_SOLIDS)
+  assert parsed["car_patch_faces"] == 1
+  custom_evol = dict(
+      parameters=dict(eval_mod.CHAMPION_F1_PARAMS, diffuser_angle_deg=15.40),
+      neg_SCz_m2=1.92,
+      SCx_m2=1.18,
+      L_over_D=1.6271,
+      front_aero_balance=0.442,
+      score=2.24,
+      f1_aero_lap_score=2.24,
+      program_name="custom_live_gen_champ",
+      components=parsed["components"],
+      cp_x_m=parsed["cp_x_m"],
+      cp_suction=parsed["cp_suction"],
+      surface_polygons=parsed["surface_polygons"],
+  )
+  custom_png = eval_mod.visualize_f1_aero_comparison(
+      evolved_data=custom_evol, output_path=tmp_path / "custom_f1.png"
+  )
+  custom_gif = eval_mod.generate_f1_aero_evolution_gif(
+      evolved_data=custom_evol, output_path=tmp_path / "custom_f1.gif"
+  )
+  assert custom_png.is_file() and custom_png.read_bytes().startswith(b"\x89PNG")
+  assert custom_gif.is_file() and custom_gif.read_bytes().startswith(b"GIF8")
+
+  # 11. Regression: Makefile builds executable evaluator.sh and run_experiment.py
+  #     normalizes default _MODEL="MODEL_UNSPECIFIED" without ValueError
+  if shutil.which("make"):
+    mk_dir = tmp_path / "f1_make_test"
+    mk_dir.mkdir()
+    shutil.copy2(exp_dir / "Makefile", mk_dir / "Makefile")
+    subprocess.run(["make", "all"], cwd=mk_dir, check=True)
+    eval_sh = mk_dir / "evaluator.sh"
+    assert eval_sh.is_file() and os.access(eval_sh, os.X_OK)
+    assert "cloud_evaluator.py" in eval_sh.read_text(encoding="utf-8")
+
+  run_exp_text = (exp_dir / "run_experiment.py").read_text(encoding="utf-8")
+  assert "MODEL_UNSPECIFIED" in run_exp_text
+
+  # 12. Regression: NaN field, diverged pressure blow-up, stdout-only FOAM FATAL ERROR,
+  #     and subprocess TimeoutExpired in live OpenFOAM path
+  (poly_case / "200" / "p").write_text(
+      "FoamFile { object p; }\ninternalField nonuniform List<scalar> 1 ( nan );\n",
+      encoding="utf-8",
+  )
+  with pytest.raises(ValueError, match="Non-finite"):
+    runner.parse_polymesh_patch_forces(poly_case, "200")
+
+  fake_backend = {
+      "distribution": "openfoam14",
+      "block_mesh": "/bin/true",
+      "snappy": "/bin/true",
+      "solver_cmd": ["/bin/true"],
+      "surface_check": None,
+      "geom_type": "triSurface",
+      "env": dict(os.environ),
+  }
+  monkeypatch.setattr(runner, "detect_openfoam_backend", lambda: fake_backend)
+
+  # (a) Diverged pressure blow-up (-SCz = +50000 m^2) rejected as invalid
+  def _stage_diverged_case(cmd, cwd=None, **kwargs):
+    del kwargs
+    if cmd == ["/bin/true"] and cwd is not None:
+      cw = Path(cwd)
+      shutil.copytree(
+          poly2 / "constant" / "polyMesh",
+          cw / "constant" / "polyMesh",
+          dirs_exist_ok=True,
+      )
+      (cw / "200").mkdir(exist_ok=True)
+      (cw / "200" / "p").write_text(
+          "FoamFile { object p; }\ninternalField nonuniform List<scalar> 2 ( -1e8 -1e8 );\n",
+          encoding="utf-8",
+      )
+      (cw / "200" / "U").write_text(
+          "FoamFile { object U; }\ninternalField uniform (45 0 0);\n",
+          encoding="utf-8",
+      )
+      (cw / "200" / "nut").write_text(
+          "FoamFile { object nut; }\ninternalField uniform 0.001;\n",
+          encoding="utf-8",
+      )
+    return subprocess.CompletedProcess(cmd, 0, stdout="OK", stderr="")
+
+  monkeypatch.setattr(runner.subprocess, "run", _stage_diverged_case)
+  div_res = runner.evaluate_f1_aero_cfd(dict(eval_mod.CHAMPION_F1_PARAMS))
+  assert div_res["valid"] is False
+  assert div_res["f1_aero_lap_score"] == -100.0
+  assert "diverged" in div_res["reason"].lower()
+
+  # (b) FOAM FATAL ERROR printed to stdout (empty stderr) captured in failure reason
+  def _raise_foam_stdout(cmd, **kwargs):
+    del kwargs
+    raise subprocess.CalledProcessError(
+        1, cmd, output="FOAM FATAL ERROR: Floating point exception", stderr=""
+    )
+
+  monkeypatch.setattr(runner.subprocess, "run", _raise_foam_stdout)
+  err_res = runner.evaluate_f1_aero_cfd(dict(eval_mod.CHAMPION_F1_PARAMS))
+  assert err_res["valid"] is False
+  assert err_res["f1_aero_lap_score"] == -100.0
+  assert "FOAM FATAL ERROR" in err_res["reason"]
+
+  # (c) Subprocess TimeoutExpired caught cleanly
+  def _raise_timeout(cmd, **kwargs):
+    del kwargs
+    raise subprocess.TimeoutExpired(cmd=cmd, timeout=240)
+
+  monkeypatch.setattr(runner.subprocess, "run", _raise_timeout)
+  to_res = runner.evaluate_f1_aero_cfd(dict(eval_mod.CHAMPION_F1_PARAMS))
+  assert to_res["valid"] is False
+  assert to_res["f1_aero_lap_score"] == -100.0
+  assert "timed out" in to_res["reason"].lower()
+
 
