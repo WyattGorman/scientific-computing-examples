@@ -122,14 +122,14 @@ BASELINE_F1_PARAMS: dict[str, float] = {
 }
 
 CHAMPION_F1_PARAMS: dict[str, float] = {
-    "front_ride_height_mm": 22.8,
-    "rear_ride_height_mm": 76.5,
-    "diffuser_angle_deg": 16.15,
-    "diffuser_strake_height_mm": 52.0,
-    "fw_flap_angle_deg": 22.0,
-    "fw_outwash_toe_deg": 4.2,
-    "rw_aoa_deg": 36.2,
-    "sidepod_undercut_ratio": 0.32,
+    "front_ride_height_mm": 20.4,
+    "rear_ride_height_mm": 84.5,
+    "diffuser_angle_deg": 16.38,
+    "diffuser_strake_height_mm": 64.0,
+    "fw_flap_angle_deg": 26.0,
+    "fw_outwash_toe_deg": 2.9,
+    "rw_aoa_deg": 37.8,
+    "sidepod_undercut_ratio": 0.34,
 }
 
 
@@ -258,18 +258,21 @@ def _load_history() -> dict[str, Any]:
 
 
 def _get_default_f1_telemetry() -> tuple[dict[str, Any], dict[str, Any]]:
-  """Returns baseline (Gen 0) and discovered champion (Gen 12) CFD telemetry."""
+  """Returns baseline (Iter 0) and discovered champion (Iter 999) CFD telemetry."""
   history = _load_history()
   ms0 = dict(history["generation_milestones"][0])
-  ms12 = dict(history["generation_milestones"][-1])
-  ms0["surface_polygons"] = history["surface_cp_meshes"]["baseline_gen0"]
+  ms_champ = dict(history["generation_milestones"][-1])
+  meshes = history["surface_cp_meshes"]
+  ms0["surface_polygons"] = meshes["baseline_gen0"]
   ms0["score"] = float(ms0["f1_aero_lap_score"])
   ms0["program_name"] = "gen00_seed_baseline"
 
-  ms12["surface_polygons"] = history["surface_cp_meshes"]["champion_gen12"]
-  ms12["score"] = float(ms12["f1_aero_lap_score"])
-  ms12["program_name"] = "gen12_discovered_champion"
-  return ms0, ms12
+  ms_champ["surface_polygons"] = meshes.get(
+      "champion_iter1000", meshes["champion_gen12"]
+  )
+  ms_champ["score"] = float(ms_champ["f1_aero_lap_score"])
+  ms_champ["program_name"] = "iter0999_discovered_champion"
+  return ms0, ms_champ
 
 
 def _floor_and_diffuser_box_mm(
@@ -485,9 +488,9 @@ def visualize_f1_aero_comparison(
   fig = plt.figure(figsize=(16.8, 11.5), dpi=png_dpi)
   fig.patch.set_facecolor("#f8fafc")
   fig.suptitle(
-      "AlphaEvolve × OpenFOAM 3D Spalart-Allmaras RANS: PERRINN 2017 Formula 1 Aerodynamic Evolution\n"
-      f"Gen 0 Seed (-SCz = {base_scz:.2f} m², L/D = {base_ld:.2f}, Front Bal = {base_fb:.1f}%, Score = {base_score:+.2f})  →  "
-      f"Gen 12 Champion (-SCz = {evol_scz:.2f} m² [+{(evol_scz / max(base_scz, 1e-6) - 1.0) * 100.0:.0f}%], "
+      "AlphaEvolve × OpenFOAM 3D Spalart-Allmaras RANS: PERRINN 2017 Formula 1 Aerodynamic Evolution (1,000 Iterations)\n"
+      f"Iter 0 Seed (-SCz = {base_scz:.2f} m², L/D = {base_ld:.2f}, Front Bal = {base_fb:.1f}%, Score = {base_score:+.2f})  →  "
+      f"Iter 999 Champion (-SCz = {evol_scz:.2f} m² [+{(evol_scz / max(base_scz, 1e-6) - 1.0) * 100.0:.0f}%], "
       f"L/D = {evol_ld:.2f}, Front Bal = {evol_fb:.1f}%, Score = {evol_score:+.2f})",
       fontsize=11.3,
       fontweight="bold",
@@ -907,9 +910,9 @@ def visualize_f1_aero_comparison(
       fontweight="bold",
   )
   ax3.annotate(
-      f"Gen 12 Champion\nScore = {ms_scores[-1]:+.2f}\n-SCz = {ms_scz[-1]:.2f} m², L/D = {ms_ld[-1]:.2f}",
-      xy=(12, ms_scores[-1]),
-      xytext=(7.1, -1.65),
+      f"Iter 999 Champion\nScore = {ms_scores[-1]:+.2f}\n-SCz = {ms_scz[-1]:.2f} m², L/D = {ms_ld[-1]:.2f}",
+      xy=(ms_gens[-1], ms_scores[-1]),
+      xytext=(max(1.0, ms_gens[-1] - 5.2), -1.65),
       arrowprops=dict(arrowstyle="->", color="#1d4ed8", lw=1.3),
       fontsize=8.0,
       fontweight="bold",
@@ -921,15 +924,15 @@ def visualize_f1_aero_comparison(
       ),
   )
 
-  ax3.set_xlim(-0.5, 12.6)
+  ax3.set_xlim(-0.5, max(ms_gens) + 0.6)
   ax3.set_ylim(-6.3, 2.7)
-  ax3.set_xlabel("AlphaEvolve Generation", fontsize=9.3)
+  ax3.set_xlabel("Improved Evolution Milestone # (Across 1,000 Iterations)", fontsize=9.3)
   ax3.set_ylabel(
       "Primary Fitness: f1_aero_lap_score", fontsize=9.6, color="#1d4ed8"
   )
   ax3.tick_params(axis="y", labelcolor="#1d4ed8")
   ax3.set_title(
-      "D. 21-Candidate 3D OpenFOAM RANS Campaign (~57,000 Hex Cells / Run)",
+      f"D. 1,000-Iteration Campaign ({len(all_cands)} Real 3D OpenFOAM RANS Runs, ~57k Hex Cells)",
       fontsize=10.1,
       fontweight="bold",
   )
@@ -951,7 +954,7 @@ def generate_f1_aero_evolution_gif(
     evolved_data: Mapping[str, Any] | None = None,
     output_path: Path | str | None = None,
 ) -> Path:
-  """Generates an animated multi-generation 3D OpenFOAM F1 evolution GIF."""
+  """Generates a high-resolution model-only 3D OpenFOAM F1 evolution GIF (no graphs)."""
   import matplotlib  # pylint: disable=g-import-not-at-top
 
   matplotlib.use("Agg")
@@ -969,13 +972,12 @@ def generate_f1_aero_evolution_gif(
   is_unit_test = bool(
       os.environ.get("TEST_TMPDIR") or os.environ.get("PYTEST_CURRENT_TEST")
   )
-  stride = 12 if is_unit_test else 1
-  gif_dpi = 56 if is_unit_test else 96
+  stride = 13 if is_unit_test else 1
+  gif_dpi = 60 if is_unit_test else 200
   tri_stride = 8 if is_unit_test else 1
 
   history = _load_history()
   milestones = [dict(m) for m in history["generation_milestones"]]
-  all_cands = history["all_evaluated_candidates"]
   meshes = history["surface_cp_meshes"]
 
   for target_idx, custom_data in ((0, baseline_data), (-1, evolved_data)):
@@ -992,22 +994,8 @@ def generate_f1_aero_evolution_gif(
         merged["candidate_id"] = str(custom_data["program_name"])
       milestones[target_idx] = merged
 
-  ms0 = milestones[0]
-  ms_gens = [int(m["generation"]) for m in milestones]
-  ms_scores = [float(m["f1_aero_lap_score"]) for m in milestones]
-  ms_scz = [float(m["neg_SCz_m2"]) for m in milestones]
-  ms_fb = [float(m["front_aero_balance"]) * 100.0 for m in milestones]
-  ms_ld = [float(m["L_over_D"]) for m in milestones]
-  cand_gens = [int(c["generation"]) for c in all_cands]
-  cand_scores = [float(c["f1_aero_lap_score"]) for c in all_cands]
-
-  cp_x = np.array(ms0["cp_x_m"], dtype=float)
-  base_neg_cp = -np.array(ms0["cp_suction"], dtype=float)
-  x_dense = np.linspace(-0.92, 3.775, 180)
-  z_base_mm = _floor_and_diffuser_box_mm(ms0["parameters"], x_dense)
-
   cmap_cp = cm.RdYlBu_r
-  norm_cp = mcolors.Normalize(vmin=-1.55, vmax=0.75)
+  norm_cp = mcolors.Normalize(vmin=-1.45, vmax=0.75)
 
   frames: list[Image.Image] = []
   durations: list[int] = []
@@ -1016,10 +1004,10 @@ def generate_f1_aero_evolution_gif(
     if idx % stride != 0 and idx != len(milestones) - 1:
       continue
     gen = int(ms["generation"])
+    it_num = int(ms.get("iteration", gen))
     p = ms["parameters"]
     score_now = float(ms["f1_aero_lap_score"])
     scz_now = float(ms["neg_SCz_m2"])
-    scx_now = float(ms["SCx_m2"])
     ld_now = float(ms["L_over_D"])
     fb_now = float(ms["front_aero_balance"]) * 100.0
 
@@ -1030,30 +1018,20 @@ def generate_f1_aero_evolution_gif(
     elif gen < 8:
       raw_mesh = meshes["mid_gen4"]
     else:
-      raw_mesh = meshes["champion_gen12"]
+      raw_mesh = meshes.get("champion_iter1000", meshes["champion_gen12"])
 
-    fig = plt.figure(figsize=(13.8, 8.9), dpi=gif_dpi)
-    fig.patch.set_facecolor("#f8fafc")
-    fig.suptitle(
-        f"AlphaEvolve × OpenFOAM 3D F1 Evolution — Gen {gen:02d}/12  "
-        f"({ms['candidate_id']})\n"
-        f"-SCz = {scz_now:.3f} m²  |  SCx = {scx_now:.3f} m²  |  "
-        f"L/D = {ld_now:.3f}  |  Front Balance = {fb_now:.1f}%  |  "
-        f"Lap Score = {score_now:+.3f}",
-        fontsize=11.4,
-        fontweight="bold",
-        color="#0f172a",
-    )
+    fig = plt.figure(figsize=(19.2, 10.8), dpi=gif_dpi)
+    fig.patch.set_facecolor("#090d16")
+    ax0 = fig.add_axes([0.0, 0.0, 1.0, 1.0], projection="3d")
+    ax0.set_facecolor("#090d16")
+    ax0.set_axis_off()
 
-    # Panel A: Rotating Continuous 3D Full-Car PERRINN F1 STL + OpenFOAM Cp
-    ax0 = fig.add_subplot(2, 2, 1, projection="3d")
-    ax0.set_facecolor("#f8fafc")
     car_v, car_cp, proj_v, proj_cp = _build_continuous_full_car_stl_cp(
         p,
         raw_mesh,
         ms["components"],
         y_offset=0.0,
-        z_floor_projection=-0.46,
+        z_floor_projection=-0.42,
         tri_stride=tri_stride,
     )
     if proj_v:
@@ -1062,7 +1040,7 @@ def generate_f1_aero_evolution_gif(
               proj_v,
               facecolors=cmap_cp(norm_cp(proj_cp)),
               edgecolors="none",
-              alpha=0.82,
+              alpha=0.55,
           )
       )
     ax0.add_collection3d(
@@ -1070,175 +1048,36 @@ def generate_f1_aero_evolution_gif(
             car_v,
             facecolors=cmap_cp(norm_cp(car_cp)),
             edgecolors="#0f172a",
-            linewidths=0.14,
-            alpha=0.96,
+            linewidths=0.10,
+            alpha=0.98,
         )
     )
-    azim_deg = -142.0 + 78.0 * (idx / max(len(milestones) - 1, 1))
-    ax0.set_xlim(-1.05, 4.10)
+    ax0.set_xlim(-1.05, 4.05)
     ax0.set_ylim(-1.25, 1.25)
-    ax0.set_zlim(-0.52, 1.15)
-    ax0.set_box_aspect((5.15, 2.50, 1.67))
-    ax0.view_init(elev=22, azim=azim_deg)
-    ax0.set_xlabel("X [m]", fontsize=8.0, labelpad=-3)
-    ax0.set_ylabel("Y [m]", fontsize=8.0, labelpad=-3)
-    ax0.set_zlabel("Z [m]", fontsize=8.0, labelpad=-3)
-    ax0.tick_params(labelsize=7.0)
-    ax0.set_title(
-        f"A. 3D PERRINN F1 OpenFOAM Surface Cp (h_f={p['front_ride_height_mm']:.1f}mm, "
-        f"h_r={p['rear_ride_height_mm']:.1f}mm, Diff={p['diffuser_angle_deg']:.1f}°)",
-        fontsize=9.1,
+    ax0.set_zlim(-0.48, 1.10)
+    ax0.set_box_aspect((5.10, 2.50, 1.58))
+    ax0.view_init(elev=19.5, azim=-132.0)
+
+    fig.text(
+        0.03,
+        0.93,
+        f"PERRINN 2017 FORMULA 1 CAR  •  OPENFOAM 3D RANS EVOLUTION  •  ITERATION {it_num:04d} / 1000\n"
+        f"Evolution #{idx} / {len(milestones) - 1} — {ms.get('milestone', ms['candidate_id'])}\n"
+        f"-SCz = {scz_now:.3f} m²   |   L/D = {ld_now:.3f}   |   Front Balance = {fb_now:.1f}%   |   "
+        f"Lap Score = {score_now:+.3f}   |   Rake {p['front_ride_height_mm']:.1f}/{p['rear_ride_height_mm']:.1f} mm   |   "
+        f"Diffuser {p['diffuser_angle_deg']:.2f}°",
+        fontsize=11.5,
         fontweight="bold",
+        color="#f8fafc",
+        va="top",
     )
 
-    # Panel B: Live Venturi Floor Clearance & Suction -Cp(x)
-    ax1 = fig.add_subplot(2, 2, 2)
-    ax1.set_facecolor("#ffffff")
-    curr_neg_cp = -np.array(ms["cp_suction"], dtype=float)
-    z_curr_mm = _floor_and_diffuser_box_mm(p, x_dense)
-    ax1.plot(cp_x, base_neg_cp, "k--", lw=1.6, label="Gen 0 Seed -Cp(x)")
-    ax1.plot(
-        cp_x,
-        curr_neg_cp,
-        color="#1d4ed8",
-        lw=2.4,
-        label=f"Gen {gen} Suction -Cp(x) (Floor -SCz={ms['components']['underbody']['neg_SCz_m2']:.2f} m²)",
-    )
-    ax1.fill_between(
-        cp_x,
-        base_neg_cp,
-        curr_neg_cp,
-        where=(curr_neg_cp >= base_neg_cp),
-        color="#93c5fd",
-        alpha=0.38,
-    )
-    ax1_t = ax1.twinx()
-    ax1_t.plot(x_dense, z_base_mm, color="#94a3b8", ls=":", lw=1.4)
-    ax1_t.plot(
-        x_dense,
-        z_curr_mm,
-        color="#15803d",
-        ls="-.",
-        lw=2.0,
-        label="Floor / Diffuser Box [mm]",
-    )
-    ax1_t.axhline(175.0, color="#dc2626", ls="--", lw=1.2)
-    ax1_t.set_ylim(0.0, 215.0)
-    ax1_t.set_ylabel("Floor / Diffuser Box [mm]", fontsize=8.3, color="#15803d")
-    ax1_t.tick_params(axis="y", labelcolor="#15803d", labelsize=7.5)
-
-    ax1.set_xlim(-0.98, 3.92)
-    ax1.set_ylim(-0.32, 1.02)
-    ax1.set_xlabel("Streamwise X [m]", fontsize=8.5)
-    ax1.set_ylabel("Suction -Cp(x) [-]", fontsize=8.5)
-    ax1.set_title(
-        f"B. Ground-Effect Suction & Raked Diffuser (Toe={p['fw_outwash_toe_deg']:.1f}°, "
-        f"Undercut={p['sidepod_undercut_ratio']:.2f})",
-        fontsize=9.1,
-        fontweight="bold",
-    )
-    ax1.grid(True, linestyle=":", alpha=0.5)
-    ax1.legend(loc="upper left", fontsize=7.5, framealpha=0.92)
-
-    # Panel C: Downforce vs. Front Aero Balance Trajectory
-    ax2 = fig.add_subplot(2, 2, 3)
-    ax2.set_facecolor("#ffffff")
-    ax2.axvspan(
-        41.7,
-        47.3,
-        color="#dcfce7",
-        alpha=0.75,
-        label="PERRINN Neutral Window (44.5% ± 2.8%)",
-    )
-    ax2.axvline(44.5, color="#16a34a", ls="--", lw=1.5)
-    ax2.plot(
-        ms_fb[: idx + 1],
-        ms_scz[: idx + 1],
-        "o-",
-        color="#2563eb",
-        lw=2.2,
-        ms=5.5,
-        label="Evolutionary Trajectory",
-    )
-    ax2.scatter(
-        [fb_now],
-        [scz_now],
-        color="#dc2626",
-        edgecolors="#0f172a",
-        s=95,
-        zorder=6,
-        label=f"Gen {gen} (L/D = {ld_now:.2f})",
-    )
-    ax2.set_xlim(38.0, 83.0)
-    ax2.set_ylim(0.50, 1.80)
-    ax2.set_xlabel("Front Aerodynamic Balance FB [%]", fontsize=8.5)
-    ax2.set_ylabel("Full-Car Downforce Area -SCz [m²]", fontsize=8.5)
-    ax2.set_title(
-        "C. Downforce vs. Pitch-Moment Stability Convergence",
-        fontsize=9.1,
-        fontweight="bold",
-    )
-    ax2.grid(True, linestyle=":", alpha=0.5)
-    ax2.legend(loc="lower right", fontsize=7.5, framealpha=0.92)
-
-    # Panel D: Live OpenFOAM Evolutionary Frontier
-    ax3 = fig.add_subplot(2, 2, 4)
-    ax3.set_facecolor("#ffffff")
-    seen_mask = [g <= gen for g in cand_gens]
-    ax3.scatter(
-        [g for g, m in zip(cand_gens, seen_mask) if m],
-        [s for s, m in zip(cand_scores, seen_mask) if m],
-        color="#94a3b8",
-        edgecolors="#475569",
-        s=40,
-        alpha=0.80,
-        label="Evaluated OpenFOAM Runs",
-    )
-    ax3.plot(
-        ms_gens[: idx + 1],
-        ms_scores[: idx + 1],
-        "o-",
-        color="#1d4ed8",
-        lw=2.4,
-        ms=5.5,
-        label="Best Lap Score",
-    )
-    ax3.scatter(
-        [gen], [score_now], color="#dc2626", edgecolors="#0f172a", s=90, zorder=6
-    )
-    ax3_t = ax3.twinx()
-    ax3_t.plot(
-        ms_gens[: idx + 1],
-        ms_ld[: idx + 1],
-        "^--",
-        color="#b45309",
-        lw=1.8,
-        ms=4.5,
-        label="Aero L/D [-]",
-    )
-    ax3_t.set_ylim(0.40, 1.35)
-    ax3_t.set_ylabel("Aero Efficiency L/D [-]", fontsize=8.3, color="#b45309")
-    ax3_t.tick_params(axis="y", labelcolor="#b45309", labelsize=7.5)
-
-    ax3.set_xlim(-0.5, 12.6)
-    ax3.set_ylim(-6.3, 2.6)
-    ax3.set_xlabel("Generation", fontsize=8.5)
-    ax3.set_ylabel("f1_aero_lap_score", fontsize=8.5, color="#1d4ed8")
-    ax3.set_title(
-        "D. 3D OpenFOAM Spalart-Allmaras RANS Score & L/D Progression",
-        fontsize=9.1,
-        fontweight="bold",
-    )
-    ax3.grid(True, linestyle=":", alpha=0.5)
-    ax3.legend(loc="lower right", fontsize=7.5, framealpha=0.92)
-
-    fig.tight_layout(rect=[0, 0.01, 1, 0.91])
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=gif_dpi)
     plt.close(fig)
     buf.seek(0)
     frames.append(Image.open(buf).convert("P", palette=Image.Palette.ADAPTIVE))
-    durations.append(900 if idx in (0, len(milestones) - 1) else 460)
+    durations.append(950 if idx in (0, len(milestones) - 1) else 480)
 
   frames[0].save(
       out_path,

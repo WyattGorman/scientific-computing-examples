@@ -1121,7 +1121,7 @@ def test_f1_racecar_openfoam_end_to_end_and_guardrails(
   base_score = _extract_primary_score(base_res)
   assert base_score == pytest.approx(-5.7525, abs=1e-2)
 
-  # 2. Evolved Gen 12 Champion setup (+1.8704, -SCz = 1.647 m^2, FB = 47.12%)
+  # 2. Evolved Iter 999 Champion setup (+2.2219, -SCz = 1.8503 m^2, FB = 42.72%)
   monkeypatch.setattr(
       main_mod,
       "design_f1_aero_package",
@@ -1129,8 +1129,8 @@ def test_f1_racecar_openfoam_end_to_end_and_guardrails(
   )
   champ_res = eval_mod.evaluate()
   champ_score = _extract_primary_score(champ_res)
-  assert champ_score == pytest.approx(1.8704, abs=1e-2)
-  assert champ_score > base_score + 7.5
+  assert champ_score == pytest.approx(2.2219, abs=1e-2)
+  assert champ_score > base_score + 7.9
 
   # 3. Unseen non-anchor interior setup exercises residual Shepard-Gaussian interpolation
   unseen_params = {

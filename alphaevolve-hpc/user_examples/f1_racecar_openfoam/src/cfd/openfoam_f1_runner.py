@@ -1002,10 +1002,17 @@ def _evaluate_calibrated_3d_rans_surrogate(
         m["candidate_id"]: m for m in history["generation_milestones"]
     }
     ms = milestones_by_id.get(hit["candidate_id"], history["generation_milestones"][0])
+    surf_meshes = history["surface_cp_meshes"]
     surf_key = "baseline_gen0"
-    if hit["candidate_id"] == "gen12_discovered_champion":
-      surf_key = "champion_gen12"
-    elif hit["generation"] >= 4:
+    if hit["candidate_id"] in surf_meshes:
+      surf_key = hit["candidate_id"]
+    elif hit["candidate_id"] in ("iter_0999_ep8", "gen12_discovered_champion"):
+      surf_key = (
+          "champion_iter1000"
+          if "champion_iter1000" in surf_meshes
+          else "champion_gen12"
+      )
+    elif hit.get("generation", 0) >= 4:
       surf_key = "mid_gen4"
     return {
         "n_cells": int(hit["n_cells"]),
@@ -1014,9 +1021,9 @@ def _evaluate_calibrated_3d_rans_surrogate(
         "L_over_D": float(hit["L_over_D"]),
         "front_aero_balance": float(hit["front_aero_balance"]),
         "components": hit["components"],
-        "cp_x_m": ms["cp_x_m"],
-        "cp_suction": ms["cp_suction"],
-        "surface_polygons": history["surface_cp_meshes"][surf_key],
+        "cp_x_m": hit.get("cp_x_m", ms["cp_x_m"]),
+        "cp_suction": hit.get("cp_suction", ms["cp_suction"]),
+        "surface_polygons": surf_meshes[surf_key],
     }
 
   # Analytical baseline physics model capturing 3D ground-effect, stall, & pitch
@@ -1034,8 +1041,8 @@ def _evaluate_calibrated_3d_rans_surrogate(
     # Ground-effect Venturi + diffuser suction (peaks near diff=16.2, stalls >17.5)
     venturi = (
         0.18
-        + 0.46 * ((42.0 - hf) / 20.0) ** 1.15 * np.clip(rake, 0.2, 1.35)
-        + 0.34 * math.sin(math.pi * min(1.15, (diff - 6.0) / 21.0))
+        + 0.46 * (max(0.0, (42.0 - hf) / 20.0) ** 1.15) * np.clip(rake, 0.2, 1.35)
+        + 0.34 * math.sin(math.pi * min(1.15, max(0.0, diff - 6.0) / 21.0))
         + 0.08 * ((strk - 25.0) / 30.0)
         - 0.28 * max(0.0, diff - 16.8) ** 1.6
     )
