@@ -42,30 +42,30 @@ graph TD
 
 ---
 
-## Baseline vs. Evolved Champion (1,000 Evolutionary Iterations & 60 Real 3D OpenFOAM RANS Runs)
+## Baseline vs. Evolved Champion (3,000 Evolutionary Iterations & 130 Real 3D OpenFOAM RANS Runs)
 
 ![OpenFOAM 3D PERRINN 2017 Formula 1 Aerodynamic Evolution Comparison](f1_aero_comparison.png)
 
 ![OpenFOAM 3D PERRINN 2017 Formula 1 Aerodynamic Evolution 4K Model-Only Animation](f1_aero_evolution.gif)
 
-| Aerodynamic Metric | Iter 0 Seed (`main.py`) | Iter 413 Mid-Evolution (`iter_0413_ep4`) | Iter 999 Champion (`iter_0999_ep8`) | Evolution Gain (Iter 999 vs. Seed) |
+| Aerodynamic Metric | Iter 0 Seed (`main.py`) | Iter 999 Mid-Campaign (`iter_0999_ep8`) | Iter 2982 Champion (`iter_2982_ep18`) | Evolution Gain (Iter 2982 vs. Seed) |
 | :--- | :---: | :---: | :---: | :---: |
-| **`f1_aero_lap_score`** | **`-5.7525`** | `+1.8704` | **`+2.2219`** | **`+7.9744` (`-5.75` $\to$ `+2.22`)** |
-| **Full-Car Downforce Area ($-SC_z$)** | `0.6201 m²` | `1.6470 m²` | **`1.8503 m²`** | **`+198.4%` (`2.98x` baseline)** |
-| **Full-Car Drag Area ($SC_x$)** | `1.1472 m²` | `1.3948 m²` | **`1.4895 m²`** | `+29.8%` for `+198.4%` downforce |
-| **Aerodynamic Efficiency ($L/D = -SC_z / SC_x$)** | `0.5405` | `1.1807` | **`1.2422`** | **`+129.8%` (`2.30x` efficiency)** |
-| **Front Aerodynamic Balance ($\text{FB}$)** | `78.90%` ❌ (Oversteer) | `47.12%` ✅ | **`42.72%` ✅** | **Locked inside `44.5% ± 2.8%` window** |
-| **Underbody & Diffuser Downforce ($-SC_{z,\text{floor}}$)** | `+0.1864 m²` (`30.1%`) | `+1.0183 m²` (`61.8%`) | **`+1.1355 m²` (`61.4%`)** | **`6.09x` ground-effect suction** |
-| **2017 Delta Front Wing ($-SC_{z,\text{FW}}$)** | `+0.7517 m²` | `+0.7757 m²` | **`+0.7852 m²`** | Balanced against rear Venturi load |
-| **Dual-Element Rear Wing ($-SC_{z,\text{RW}}$)** | `+0.4971 m²` | `+0.5288 m²` | **`+0.5622 m²`** | Diffuser-coupled Coanda extraction |
-| **Monocoque & Sidepod Drag ($SC_{x,\text{chassis}}$)** | `0.1362 m²` | `0.0899 m²` | **`0.0973 m²`** | **`-28.6%` body pressure drag** |
-| **Front/Rear Ride Height ($h_f / h_r$)** | `40.0 / 62.0 mm` | `22.8 / 76.5 mm` | **`20.4 / 84.5 mm`** | **`1.06°` extreme Venturi rake** |
-| **Diffuser Angle / FIA Box Height** | `10.00°` (`112.6 mm`) | `16.15°` (`172.0 mm`) | **`16.38°` (`174.4 / 175.0 mm`)** | **99.7% of FIA Art. 3.5.3 box limit** |
+| **`f1_aero_lap_score`** | **`-5.7525`** | `+2.2219` | **`+2.9677`** | **`+8.7202` (`-5.75` $\to$ `+2.97`)** |
+| **Full-Car Downforce Area ($-SC_z$)** | `0.6201 m²` | `1.8503 m²` | **`2.1545 m²`** | **`+247.4%` (`3.47x` baseline)** |
+| **Full-Car Drag Area ($SC_x$)** | `1.1472 m²` | `1.4895 m²` | **`1.5008 m²`** | `+30.8%` for `+247.4%` downforce |
+| **Aerodynamic Efficiency ($L/D = -SC_z / SC_x$)** | `0.5405` | `1.2422` | **`1.4356`** | **`+165.6%` (`2.66x` efficiency)** |
+| **Front Aerodynamic Balance ($\text{FB}$)** | `78.90%` ❌ (Oversteer) | `42.72%` ✅ | **`43.84%` ✅** | **Within `0.66%` of `44.5%` target** |
+| **Underbody & Diffuser Downforce ($-SC_{z,\text{floor}}$)** | `+0.1864 m²` (`30.1%`) | `+1.1355 m²` (`61.4%`) | **`+1.2840 m²` (`59.6%`)** | **`6.89x` ground-effect suction** |
+| **2017 Delta Front Wing ($-SC_{z,\text{FW}}$)** | `+0.7517 m²` | `+0.7852 m²` | **`+0.8555 m²`** | `+13.8%` balanced front axle load |
+| **Dual-Element Rear Wing ($-SC_{z,\text{RW}}$)** | `+0.4971 m²` | `+0.5622 m²` | **`+0.6095 m²`** | `+22.6%` diffuser-coupled extraction |
+| **Monocoque & Sidepod Drag ($SC_{x,\text{chassis}}$)** | `0.1362 m²` | `0.0973 m²` | **`0.0920 m²`** | **`-32.5%` body pressure drag** |
+| **Front/Rear Ride Height ($h_f / h_r$)** | `40.0 / 62.0 mm` | `20.4 / 84.5 mm` | **`20.01 / 94.18 mm`** | **`1.22°` extreme Venturi rake** |
+| **Diffuser Angle / FIA Box Height** | `10.00°` (`112.6 mm`) | `16.38°` (`174.4 mm`) | **`16.44°` (`174.9 / 175.0 mm`)** | **99.96% of FIA Art. 3.5.3 box limit** |
 
-### Key 3D Aerodynamic Discoveries Across 1,000 Iterations (AlphaEvolve + OpenFOAM)
-1. **Extreme High-Rake Venturi Ground-Effect Unlock (`h_f = 20.4 mm`, `h_r = 84.5 mm`, `diff = 16.38°`, `strake = 64.0 mm`)**: Across 1,000 evolutionary iterations (`60` real 3D OpenFOAM Spalart-Allmaras RANS evaluations), AlphaEvolve pushed the front splitter to `20.4 mm` (`0.4 mm` above the `20.0 mm` dynamic skid-block floor) while raising the rear axle floor to `84.5 mm` and expanding the rear diffuser roof to `16.38°` (`174.4 mm` exit height vs. the `175.0 mm` FIA Art. 3.5.3 ceiling = **99.7% box utilization**) with `64.0 mm` vortex strakes (`15.4 mm` ground clearance vs. `15.0 mm` minimum). This increases underbody downforce **6.09x** (`0.1864 m²` $\to$ **`1.1355 m²`**), contributing **61.4%** of total car downforce — closely matching Ravelli & Savini's published PERRINN 2017 benchmark (~58% underbody contribution).
-2. **Non-Linear Tire-Wake Outwash & Coke-Bottle Sweet Spot (`fw_outwash_toe = 2.9°`, `sidepod_undercut = 0.34`)**: 3D OpenFOAM RANS exploration revealed that excessive outwash toe (`> 5°`) unloads the outer front wing and destabilizes the Y250 vortex, whereas `2.9°` outwash toe + `0.34` Coke-bottle sidepod undercut (`0.105 m²` radiator duct area, well above the `0.088 m²` V6 hybrid cooling floor) cuts chassis pressure drag by **`-28.6%`** while energizing the rear floor shelf.
-3. **Coupled Pitch-Moment Re-Balancing (`FB: 78.90% -> 42.72%`)**: With the `16.38°` Venturi diffuser and `37.8°` dual-element rear wing generating massive rear axle suction (`-SCz = 1.698 m²` combined floor + rear wing), AlphaEvolve reloads the 2017 delta front wing (`26.0°` cascade flap, `-SCz = 0.7852 m²`) while keeping Front Aerodynamic Balance (`42.72%`) locked inside the `44.5% ± 2.8%` PERRINN neutral stability window.
+### Key 3D Aerodynamic Discoveries Across 3,000 Iterations (AlphaEvolve + OpenFOAM)
+1. **Extreme High-Rake Venturi + Deep Vortex-Strake Seal (`h_f = 20.01 mm`, `h_r = 94.18 mm`, `diff = 16.44°`, `strake = 83.77 mm`)**: Extending the evolutionary campaign to 3,000 iterations (`130` real 3D OpenFOAM Spalart-Allmaras RANS evaluations, `23` strictly-improving milestones) unlocked the coupled interaction between near-ceiling rear rake (`94.18 mm`, creating a `1.22°` pitch angle), full `16.44°` FIA Art. 3.5.3 diffuser expansion (`174.93 / 175.0 mm` = **99.96% box utilization**), and deep `83.77 mm` longitudinal vortex strakes (`15.63 mm` ground clearance vs. `15.00 mm` minimum). Underbody downforce surges **6.89x** (`0.1864 m²` $\to$ **`1.2840 m²`**), delivering **59.6%** of total vehicle downforce — matching Ravelli & Savini's published PERRINN 2017 benchmark (~58% underbody contribution).
+2. **Maximum Legal Coke-Bottle Sidepod Undercut (`sidepod_undercut = 0.473`, `fw_outwash_toe = 2.02°`)**: Pushing the Coke-bottle sidepod undercut from `0.34` (at Iteration 999) up to `0.473` (`0.0888 m²` radiator duct area vs. `0.0880 m²` V6 hybrid cooling floor = **99.1% utilization**) while trimming front-wing outwash toe to `2.02°` cuts chassis drag by **`-32.5%`**, reduces front-wheel wake drag to `0.1918 m²`, and adds `+0.3042 m²` of downforce over Iteration 999 with virtually zero net drag penalty (`SCx: 1.4895 -> 1.5008 m²`), lifting full-car `L/D` from `1.2422` to **`1.4356`** (`2.66x` baseline).
+3. **Zero-Penalty Pitch-Moment Convergence (`FB: 78.90% -> 43.84%`)**: Pairing the `28.0°` 2017 delta front-wing cascade flap (`-SCz = 0.8555 m²`) with the `38.0°` dual-element rear wing (`-SCz = 0.6095 m²`) and `1.2840 m²` Venturi floor locks Front Aerodynamic Balance at **`43.84%`** — just `0.66%` from the `44.50%` PERRINN neutral stability target.
 
 ---
 
@@ -86,7 +86,7 @@ user_examples/f1_racecar_openfoam/
 ├── setup.sh                        # Environment & OpenFOAM verification script
 ├── models/
 │   ├── perrinn_f1_2017_spec.json   # PERRINN 2017 CAD dimensions & FIA 2017 regulation bounds
-│   └── evolution_history.json      # 1,000-iteration telemetry + 60 real 3D OpenFOAM RANS runs
+│   └── evolution_history.json      # 3,000-iteration telemetry + 130 real 3D OpenFOAM RANS runs
 └── src/
     ├── cfd/
     │   └── openfoam_f1_runner.py   # OpenFOAM-14 / simpleFoam case writer, runner & polyMesh force parser

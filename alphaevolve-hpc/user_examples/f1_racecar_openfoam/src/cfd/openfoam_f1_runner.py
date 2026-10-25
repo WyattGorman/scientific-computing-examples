@@ -1112,7 +1112,15 @@ def _evaluate_calibrated_3d_rans_surrogate(
       round((1.0 - blend) * c0 + blend * c1, 4)
       for c0, c1 in zip(ms0["cp_suction"], ms12["cp_suction"])
   ]
-  surf_key = "champion_gen12" if blend > 0.68 else ("mid_gen4" if blend > 0.30 else "baseline_gen0")
+  surf_key = (
+      "champion_iter3000"
+      if (blend > 0.68 and "champion_iter3000" in history["surface_cp_meshes"])
+      else (
+          "champion_gen12"
+          if blend > 0.68
+          else ("mid_gen4" if blend > 0.30 else "baseline_gen0")
+      )
+  )
 
   return {
       "n_cells": int(round(float(np.sum(weights * np.array([a["n_cells"] for a in anchors]))))),

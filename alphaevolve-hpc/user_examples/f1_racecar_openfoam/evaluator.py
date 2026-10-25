@@ -122,14 +122,14 @@ BASELINE_F1_PARAMS: dict[str, float] = {
 }
 
 CHAMPION_F1_PARAMS: dict[str, float] = {
-    "front_ride_height_mm": 20.4,
-    "rear_ride_height_mm": 84.5,
-    "diffuser_angle_deg": 16.38,
-    "diffuser_strake_height_mm": 64.0,
-    "fw_flap_angle_deg": 26.0,
-    "fw_outwash_toe_deg": 2.9,
-    "rw_aoa_deg": 37.8,
-    "sidepod_undercut_ratio": 0.34,
+    "front_ride_height_mm": 20.01,
+    "rear_ride_height_mm": 94.18,
+    "diffuser_angle_deg": 16.44,
+    "diffuser_strake_height_mm": 83.77,
+    "fw_flap_angle_deg": 28.0,
+    "fw_outwash_toe_deg": 2.02,
+    "rw_aoa_deg": 38.0,
+    "sidepod_undercut_ratio": 0.473,
 }
 
 
@@ -258,7 +258,7 @@ def _load_history() -> dict[str, Any]:
 
 
 def _get_default_f1_telemetry() -> tuple[dict[str, Any], dict[str, Any]]:
-  """Returns baseline (Iter 0) and discovered champion (Iter 999) CFD telemetry."""
+  """Returns baseline (Iter 0) and discovered champion (Iter 2982) CFD telemetry."""
   history = _load_history()
   ms0 = dict(history["generation_milestones"][0])
   ms_champ = dict(history["generation_milestones"][-1])
@@ -268,10 +268,11 @@ def _get_default_f1_telemetry() -> tuple[dict[str, Any], dict[str, Any]]:
   ms0["program_name"] = "gen00_seed_baseline"
 
   ms_champ["surface_polygons"] = meshes.get(
-      "champion_iter1000", meshes["champion_gen12"]
+      "champion_iter3000",
+      meshes.get("champion_iter1000", meshes["champion_gen12"]),
   )
   ms_champ["score"] = float(ms_champ["f1_aero_lap_score"])
-  ms_champ["program_name"] = "iter0999_discovered_champion"
+  ms_champ["program_name"] = "iter2982_discovered_champion"
   return ms0, ms_champ
 
 
@@ -488,9 +489,9 @@ def visualize_f1_aero_comparison(
   fig = plt.figure(figsize=(16.8, 11.5), dpi=png_dpi)
   fig.patch.set_facecolor("#f8fafc")
   fig.suptitle(
-      "AlphaEvolve × OpenFOAM 3D Spalart-Allmaras RANS: PERRINN 2017 Formula 1 Aerodynamic Evolution (1,000 Iterations)\n"
+      "AlphaEvolve × OpenFOAM 3D Spalart-Allmaras RANS: PERRINN 2017 Formula 1 Aerodynamic Evolution (3,000 Iterations)\n"
       f"Iter 0 Seed (-SCz = {base_scz:.2f} m², L/D = {base_ld:.2f}, Front Bal = {base_fb:.1f}%, Score = {base_score:+.2f})  →  "
-      f"Iter 999 Champion (-SCz = {evol_scz:.2f} m² [+{(evol_scz / max(base_scz, 1e-6) - 1.0) * 100.0:.0f}%], "
+      f"Iter 2982 Champion (-SCz = {evol_scz:.2f} m² [+{(evol_scz / max(base_scz, 1e-6) - 1.0) * 100.0:.0f}%], "
       f"L/D = {evol_ld:.2f}, Front Bal = {evol_fb:.1f}%, Score = {evol_score:+.2f})",
       fontsize=11.3,
       fontweight="bold",
@@ -554,7 +555,7 @@ def visualize_f1_aero_comparison(
   ax0.text2D(
       0.03,
       0.93,
-      f"Upper Track — Gen 0 Seed: -SCz={base_scz:.2f} m², FB={base_fb:.1f}%",
+      f"Upper Track — Iter 0 Seed: -SCz={base_scz:.2f} m², FB={base_fb:.1f}%",
       transform=ax0.transAxes,
       fontsize=7.9,
       fontweight="bold",
@@ -571,7 +572,7 @@ def visualize_f1_aero_comparison(
   ax0.text2D(
       0.97,
       0.05,
-      f"Lower Track — Gen 12 Champion: -SCz={evol_scz:.2f} m², FB={evol_fb:.1f}%",
+      f"Lower Track — Iter 2982 Champion: -SCz={evol_scz:.2f} m², FB={evol_fb:.1f}%",
       transform=ax0.transAxes,
       fontsize=8.0,
       fontweight="bold",
@@ -637,7 +638,7 @@ def visualize_f1_aero_comparison(
       base_neg_cp,
       "k--",
       lw=2.0,
-      label=f"Gen 0 Seed Suction -Cp(x) (Floor -SCz = {base_floor_scz:.2f} m²)",
+      label=f"Iter 0 Seed Suction -Cp(x) (Floor -SCz = {base_floor_scz:.2f} m²)",
   )
   ax1.plot(
       cp_x,
@@ -645,7 +646,7 @@ def visualize_f1_aero_comparison(
       color="#1d4ed8",
       lw=2.6,
       label=(
-          f"Gen 12 Champion Suction -Cp(x) (Floor -SCz = {evol_floor_scz:.2f} m², "
+          f"Iter 2982 Champion Suction -Cp(x) (Floor -SCz = {evol_floor_scz:.2f} m², "
           f"{floor_mult:.1f}×)"
       ),
   )
@@ -675,7 +676,7 @@ def visualize_f1_aero_comparison(
       color="#64748b",
       ls=":",
       lw=1.7,
-      label="Gen 0 Floor / Diffuser Box Height [mm]",
+      label="Iter 0 Floor / Diffuser Box Height [mm]",
   )
   ax1_twin.plot(
       x_dense,
@@ -684,7 +685,7 @@ def visualize_f1_aero_comparison(
       ls="-.",
       lw=2.1,
       label=(
-          f"Gen 12 Raked Venturi + {evol_diff_deg:.2f}° Diffuser "
+          f"Iter 2982 Raked Venturi + {evol_diff_deg:.2f}° Diffuser "
           f"({evol_box_mm:.0f} mm)"
       ),
   )
@@ -755,7 +756,7 @@ def visualize_f1_aero_comparison(
       height=bar_h,
       color="#94a3b8",
       edgecolor="#334155",
-      label=f"Gen 0 Seed -SCz (Total = {base_scz:.2f} m², SCx = {float(base['SCx_m2']):.2f} m²)",
+      label=f"Iter 0 Seed -SCz (Total = {base_scz:.2f} m², SCx = {float(base['SCx_m2']):.2f} m²)",
   )
   ax2.barh(
       y_pos - bar_h / 2.0,
@@ -763,7 +764,7 @@ def visualize_f1_aero_comparison(
       height=bar_h,
       color="#2563eb",
       edgecolor="#0f172a",
-      label=f"Gen 12 Champion -SCz (Total = {evol_scz:.2f} m², SCx = {float(evol['SCx_m2']):.2f} m²)",
+      label=f"Iter 2982 Champion -SCz (Total = {evol_scz:.2f} m², SCx = {float(evol['SCx_m2']):.2f} m²)",
   )
   ax2.axvline(0.0, color="#0f172a", lw=1.1)
 
@@ -801,8 +802,8 @@ def visualize_f1_aero_comparison(
   )
   balance_callout = (
       "Longitudinal Pitch Stability (Target: 44.5% ± 2.8%)\n"
-      f"• Gen 0 Seed:     FB = {base_fb:.1f}%  (Snap-Oversteer Penalty)\n"
-      f"• Gen 12 Champ:  FB = {evol_fb:.1f}%  ({evol_fb_note})"
+      f"• Iter 0 Seed:     FB = {base_fb:.1f}%  (Snap-Oversteer Penalty)\n"
+      f"• Iter 2982 Champ: FB = {evol_fb:.1f}%  ({evol_fb_note})"
   )
   ax2.text(
       0.98,
@@ -823,7 +824,7 @@ def visualize_f1_aero_comparison(
   ax2.set_yticks(y_pos)
   ax2.set_yticklabels([lbl for _, lbl in patch_order], fontsize=8.4)
   ax2.invert_yaxis()
-  ax2.set_xlim(-0.82, 1.52)
+  ax2.set_xlim(-0.82, 1.72)
   ax2.set_xlabel(
       "Component Vertical Downforce Area  -SCz  [m²]   (Positive = Downforce, Negative = Lift)",
       fontsize=9.1,
@@ -841,7 +842,7 @@ def visualize_f1_aero_comparison(
       framealpha=0.93,
   )
 
-  # --- Panel D: 21-Run 3D OpenFOAM Evolutionary Frontier & L/D ---
+  # --- Panel D: 3,000-Iteration / 130-Run 3D OpenFOAM Evolutionary Frontier & L/D ---
   ax3 = fig.add_subplot(2, 2, 4)
   ax3.set_facecolor("#ffffff")
   cand_gens = [int(c["generation"]) for c in all_cands]
@@ -857,8 +858,8 @@ def visualize_f1_aero_comparison(
       cand_scores,
       color="#94a3b8",
       edgecolors="#475569",
-      s=46,
-      alpha=0.78,
+      s=42,
+      alpha=0.76,
       zorder=3,
       label=f"All {len(all_cands)} 3D OpenFOAM RANS Candidates",
   )
@@ -868,7 +869,7 @@ def visualize_f1_aero_comparison(
       "o-",
       color="#1d4ed8",
       lw=2.6,
-      ms=6.5,
+      ms=5.8,
       zorder=5,
       label="Best-So-Far f1_aero_lap_score Frontier",
   )
@@ -881,7 +882,7 @@ def visualize_f1_aero_comparison(
       "s--",
       color="#15803d",
       lw=2.0,
-      ms=5.0,
+      ms=4.6,
       label="Full-Car Downforce Area -SCz [m²]",
   )
   ax3_twin.plot(
@@ -890,7 +891,7 @@ def visualize_f1_aero_comparison(
       "^:",
       color="#b45309",
       lw=1.9,
-      ms=5.0,
+      ms=4.6,
       label="Full-Car Aero Efficiency L/D [-]",
   )
   ax3_twin.set_ylabel(
@@ -899,20 +900,20 @@ def visualize_f1_aero_comparison(
       color="#15803d",
   )
   ax3_twin.tick_params(axis="y", labelcolor="#15803d", labelsize=8.2)
-  ax3_twin.set_ylim(0.35, 1.95)
+  ax3_twin.set_ylim(0.35, 2.35)
 
   ax3.annotate(
       f"Gen 1: Rake Unlock\n({ms_scores[0]:+.2f} → {ms_scores[1]:+.2f})",
       xy=(1, ms_scores[1]),
-      xytext=(1.8, -3.55),
+      xytext=(2.2, -3.65),
       arrowprops=dict(arrowstyle="->", color="#334155", lw=1.1),
       fontsize=7.8,
       fontweight="bold",
   )
   ax3.annotate(
-      f"Iter 999 Champion\nScore = {ms_scores[-1]:+.2f}\n-SCz = {ms_scz[-1]:.2f} m², L/D = {ms_ld[-1]:.2f}",
+      f"Iter 2982 Champion\nScore = {ms_scores[-1]:+.2f}\n-SCz = {ms_scz[-1]:.2f} m², L/D = {ms_ld[-1]:.2f}",
       xy=(ms_gens[-1], ms_scores[-1]),
-      xytext=(max(1.0, ms_gens[-1] - 5.2), -1.65),
+      xytext=(max(1.0, ms_gens[-1] - 8.5), -1.75),
       arrowprops=dict(arrowstyle="->", color="#1d4ed8", lw=1.3),
       fontsize=8.0,
       fontweight="bold",
@@ -924,15 +925,15 @@ def visualize_f1_aero_comparison(
       ),
   )
 
-  ax3.set_xlim(-0.5, max(ms_gens) + 0.6)
-  ax3.set_ylim(-6.3, 2.7)
-  ax3.set_xlabel("Improved Evolution Milestone # (Across 1,000 Iterations)", fontsize=9.3)
+  ax3.set_xlim(-0.6, max(ms_gens) + 0.7)
+  ax3.set_ylim(-6.3, 3.45)
+  ax3.set_xlabel("Improved Evolution Milestone # (Across 3,000 Iterations)", fontsize=9.3)
   ax3.set_ylabel(
       "Primary Fitness: f1_aero_lap_score", fontsize=9.6, color="#1d4ed8"
   )
   ax3.tick_params(axis="y", labelcolor="#1d4ed8")
   ax3.set_title(
-      f"D. 1,000-Iteration Campaign ({len(all_cands)} Real 3D OpenFOAM RANS Runs, ~57k Hex Cells)",
+      f"D. 3,000-Iteration Campaign ({len(all_cands)} Real 3D OpenFOAM RANS Runs, ~57k Hex Cells)",
       fontsize=10.1,
       fontweight="bold",
   )
@@ -972,7 +973,7 @@ def generate_f1_aero_evolution_gif(
   is_unit_test = bool(
       os.environ.get("TEST_TMPDIR") or os.environ.get("PYTEST_CURRENT_TEST")
   )
-  stride = 13 if is_unit_test else 1
+  stride = 22 if is_unit_test else 1
   gif_dpi = 60 if is_unit_test else 200
   tri_stride = 8 if is_unit_test else 1
 
@@ -1017,8 +1018,10 @@ def generate_f1_aero_evolution_gif(
       raw_mesh = meshes["baseline_gen0"]
     elif gen < 8:
       raw_mesh = meshes["mid_gen4"]
-    else:
+    elif gen < 15:
       raw_mesh = meshes.get("champion_iter1000", meshes["champion_gen12"])
+    else:
+      raw_mesh = meshes.get("champion_iter3000", meshes["champion_gen12"])
 
     fig = plt.figure(figsize=(19.2, 10.8), dpi=gif_dpi)
     fig.patch.set_facecolor("#090d16")
@@ -1061,7 +1064,7 @@ def generate_f1_aero_evolution_gif(
     fig.text(
         0.03,
         0.93,
-        f"PERRINN 2017 FORMULA 1 CAR  •  OPENFOAM 3D RANS EVOLUTION  •  ITERATION {it_num:04d} / 1000\n"
+        f"PERRINN 2017 FORMULA 1 CAR  •  OPENFOAM 3D RANS EVOLUTION  •  ITERATION {it_num:04d} / 3000\n"
         f"Evolution #{idx} / {len(milestones) - 1} — {ms.get('milestone', ms['candidate_id'])}\n"
         f"-SCz = {scz_now:.3f} m²   |   L/D = {ld_now:.3f}   |   Front Balance = {fb_now:.1f}%   |   "
         f"Lap Score = {score_now:+.3f}   |   Rake {p['front_ride_height_mm']:.1f}/{p['rear_ride_height_mm']:.1f} mm   |   "
