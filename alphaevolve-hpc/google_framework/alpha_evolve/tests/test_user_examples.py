@@ -1119,9 +1119,9 @@ def test_f1_racecar_openfoam_end_to_end_and_guardrails(
   # 1. Seed baseline evaluation (-5.7525 due to 78.9% front aero balance & weak floor)
   base_res = eval_mod.evaluate()
   base_score = _extract_primary_score(base_res)
-  assert base_score == pytest.approx(-5.7525, abs=1e-2)
+  assert base_score == pytest.approx(-11.0295, abs=1e-2)
 
-  # 2. Evolved Iter 2982 Champion setup (+2.9677, -SCz = 2.1545 m^2, FB = 43.84%)
+  # 2. Evolved Iter 2868 Champion setup (-0.4078, -SCz = 0.6480 m^2, FB = 43.79%)
   monkeypatch.setattr(
       main_mod,
       "design_f1_aero_package",
@@ -1129,8 +1129,8 @@ def test_f1_racecar_openfoam_end_to_end_and_guardrails(
   )
   champ_res = eval_mod.evaluate()
   champ_score = _extract_primary_score(champ_res)
-  assert champ_score == pytest.approx(2.9677, abs=1e-2)
-  assert champ_score > base_score + 8.6
+  assert champ_score == pytest.approx(-0.4078, abs=1e-2)
+  assert champ_score > base_score + 10.5
 
   # 3. Unseen non-anchor interior setup exercises residual Shepard-Gaussian interpolation
   unseen_params = {
@@ -1147,7 +1147,7 @@ def test_f1_racecar_openfoam_end_to_end_and_guardrails(
       main_mod, "design_f1_aero_package", lambda bounds: dict(unseen_params)
   )
   unseen_score = _extract_primary_score(eval_mod.evaluate())
-  assert 0.5 < unseen_score < 2.2
+  assert -2.5 < unseen_score < -0.5
 
   # 4. FIA 2017 Technical Regulation & input-validation guardrails -> -100.0
   illegal_cases = [
@@ -1210,7 +1210,7 @@ def test_f1_racecar_openfoam_end_to_end_and_guardrails(
   }
   assert (case_dir / "system" / "snappyHexMeshDict").is_file()
   assert (case_dir / "constant" / "momentumTransport").is_file()
-  assert "149.2537" in (case_dir / "0" / "U").read_text(encoding="utf-8")
+  assert "-151.5152" in (case_dir / "0" / "U").read_text(encoding="utf-8")
 
   # Truncated STL should fail verify_stl_watertight
   bad_stl = tmp_path / "broken.stl"

@@ -101,7 +101,10 @@ if str(_MODULE_DIR) in sys.path:
 sys.path.insert(0, str(_MODULE_DIR))
 
 from src.cfd import openfoam_f1_runner  # pylint: disable=g-import-not-at-top
-from src.geometry.perrinn_f1_stl import build_perrinn_f1_stl  # pylint: disable=g-import-not-at-top
+from src.geometry.perrinn_f1_stl import (  # pylint: disable=g-import-not-at-top
+    build_perrinn_f1_render_mesh,
+    build_perrinn_f1_stl,
+)
 
 try:
   import main  # pylint: disable=g-import-not-at-top
@@ -122,14 +125,14 @@ BASELINE_F1_PARAMS: dict[str, float] = {
 }
 
 CHAMPION_F1_PARAMS: dict[str, float] = {
-    "front_ride_height_mm": 20.01,
-    "rear_ride_height_mm": 94.18,
-    "diffuser_angle_deg": 16.44,
-    "diffuser_strake_height_mm": 83.77,
-    "fw_flap_angle_deg": 28.0,
-    "fw_outwash_toe_deg": 2.02,
-    "rw_aoa_deg": 38.0,
-    "sidepod_undercut_ratio": 0.473,
+    "front_ride_height_mm": 32.51,
+    "rear_ride_height_mm": 94.9,
+    "diffuser_angle_deg": 16.435,
+    "diffuser_strake_height_mm": 57.23,
+    "fw_flap_angle_deg": 20.16,
+    "fw_outwash_toe_deg": 11.03,
+    "rw_aoa_deg": 37.59,
+    "sidepod_undercut_ratio": 0.333,
 }
 
 
@@ -258,21 +261,23 @@ def _load_history() -> dict[str, Any]:
 
 
 def _get_default_f1_telemetry() -> tuple[dict[str, Any], dict[str, Any]]:
-  """Returns baseline (Iter 0) and discovered champion (Iter 2982) CFD telemetry."""
+  """Returns baseline (Iter 0) and discovered champion CFD telemetry."""
   history = _load_history()
   ms0 = dict(history["generation_milestones"][0])
   ms_champ = dict(history["generation_milestones"][-1])
   meshes = history["surface_cp_meshes"]
   ms0["surface_polygons"] = meshes["baseline_gen0"]
   ms0["score"] = float(ms0["f1_aero_lap_score"])
-  ms0["program_name"] = "gen00_seed_baseline"
+  ms0["program_name"] = str(ms0.get("candidate_id", "gen00_seed_baseline"))
 
   ms_champ["surface_polygons"] = meshes.get(
       "champion_iter3000",
       meshes.get("champion_iter1000", meshes["champion_gen12"]),
   )
   ms_champ["score"] = float(ms_champ["f1_aero_lap_score"])
-  ms_champ["program_name"] = "iter2982_discovered_champion"
+  ms_champ["program_name"] = str(
+      ms_champ.get("candidate_id", "discovered_champion")
+  )
   return ms0, ms_champ
 
 
@@ -301,143 +306,410 @@ def _floor_and_diffuser_box_mm(
   return z_mm
 
 
-def _build_continuous_full_car_stl_cp(
+_CP_STOPS = np.array(
+    [-1.35, -0.80, -0.35, -0.05, 0.22, 0.50, 0.80], dtype=np.float32
+)
+_CP_RGB = np.array(
+    [
+        [0.02, 0.86, 1.00],
+        [0.08, 0.42, 0.96],
+        [0.24, 0.60, 0.95],
+        [0.82, 0.86, 0.91],
+        [0.96, 0.76, 0.30],
+        [0.94, 0.32, 0.16],
+        [0.76, 0.08, 0.14],
+    ],
+    dtype=np.float32,
+)
+
+
+def _cp_to_srgb_np(cp: np.ndarray) -> np.ndarray:
+  """Maps OpenFOAM surface pressure coefficient Cp [-1.35, +0.80] to sRGB."""
+  cp_c = np.clip(cp, _CP_STOPS[0], _CP_STOPS[-1])
+  return np.stack(
+      [
+          np.interp(cp_c, _CP_STOPS, _CP_RGB[:, 0]),
+          np.interp(cp_c, _CP_STOPS, _CP_RGB[:, 1]),
+          np.interp(cp_c, _CP_STOPS, _CP_RGB[:, 2]),
+      ],
+      axis=-1,
+  ).astype(np.float32)
+
+
+def _render_perrinn_cad_zbuffer(
     params: Mapping[str, Any],
     surface_polys: list[dict[str, Any]],
     components: Mapping[str, Any],
-    y_offset: float = 0.0,
-    z_floor_projection: float | None = None,
-    tri_stride: int = 1,
-) -> tuple[list[np.ndarray], np.ndarray, list[np.ndarray], np.ndarray]:
-  """Builds continuous watertight 3D PERRINN F1 STL colored by OpenFOAM Cp field."""
+    floor_cp_x: np.ndarray,
+    floor_neg_cp: np.ndarray,
+    width: int = 960,
+    height: int = 420,
+    decimate_stride: int = 1,
+    azim_deg: float = -133.5,
+    elev_deg: float = 19.0,
+    dist: float = 6.20,
+    fov_y_deg: float = 31.0,
+) -> np.ndarray:
+  """Renders the 67-part PERRINN 2017 Onshape CAD via pure-NumPy Z-buffering."""
   clean_p = {
       k: float(params.get(k, CHAMPION_F1_PARAMS[k]))
       for k in CHAMPION_F1_PARAMS
   }
-  with tempfile.TemporaryDirectory(prefix="f1_viz_stl_") as tmpd:
-    stl_path = Path(tmpd) / "car.stl"
-    build_perrinn_f1_stl(clean_p, stl_path)
-    stl_txt = stl_path.read_text(encoding="utf-8")
-
-  patch_samples: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-  by_p: dict[str, list[tuple[list[float], float]]] = {}
-  for item in surface_polys:
-    pname = str(item.get("p", "chassis"))
-    v = np.array(item["v"], dtype=float)
-    if v.shape[0] >= 3:
-      by_p.setdefault(pname, []).append(
-          (v.mean(axis=0).tolist(), float(item["cp"]))
-      )
-  for pname, rows in by_p.items():
-    pts_arr = np.array([r[0] for r in rows], dtype=float)
-    cp_arr = np.array([r[1] for r in rows], dtype=float)
-    patch_samples[pname] = (pts_arr, cp_arr)
-
-  car_verts: list[np.ndarray] = []
-  car_cps: list[float] = []
-  proj_verts: list[np.ndarray] = []
-  proj_cps: list[float] = []
-
-  for block in stl_txt.split("solid ")[1:]:
-    header, _, body = block.partition("\n")
-    curr_solid = header.strip()
-    v_tokens = [
-        line.strip()[7:]
-        for line in body.splitlines()
-        if line.lstrip().startswith("vertex ")
-    ]
-    if not v_tokens:
-      continue
-    coords = np.fromstring(" ".join(v_tokens), sep=" ", dtype=float).reshape(
-        -1, 3, 3
-    )
-    if tri_stride > 1 and len(coords) > 24:
-      coords = coords[::tri_stride]
-
-    valid_y = np.max(coords[:, :, 1], axis=1) > 1e-4
-    coords = coords[valid_y]
-    if len(coords) == 0:
-      continue
-    coords[:, :, 1] = np.maximum(0.0, coords[:, :, 1])
-    coords[:, :, 2] = np.maximum(0.0, coords[:, :, 2])
-
-    n_vecs = np.cross(
-        coords[:, 1] - coords[:, 0], coords[:, 2] - coords[:, 0]
-    )
-    n_norms = np.linalg.norm(n_vecs, axis=1)
-    good = n_norms > 1e-10
-    coords = coords[good]
-    n_hats = n_vecs[good] / n_norms[good, None]
-    if len(coords) == 0:
-      continue
-    centroids = coords.mean(axis=1)
-
-    comp_scz = float(components.get(curr_solid, {}).get("neg_SCz_m2", 0.0))
-    if curr_solid in patch_samples:
-      s_pts, s_cps = patch_samples[curr_solid]
-      d2 = np.sum(
-          (centroids[:, None, :] - s_pts[None, :, :]) ** 2, axis=2
-      )
-      w = 1.0 / (d2 + 0.008)
-      cp_idw = np.sum(w * s_cps[None, :], axis=1) / np.sum(w, axis=1)
-    else:
-      cp_idw = np.full(len(coords), -0.35 * comp_scz)
-
-    nz = n_hats[:, 2]
-    nx = n_hats[:, 0]
-    if curr_solid in ("underbody", "frontWing", "rearWing"):
-      cp_vals = np.where(
-          nz < -0.25,
-          np.minimum(cp_idw, -0.35 - 0.72 * max(comp_scz, 0.1)),
-          np.where(
-              nz > 0.25,
-              np.maximum(cp_idw * 0.45, 0.08 + 0.12 * max(comp_scz, 0.0)),
-              cp_idw,
-          ),
-      )
-    elif "Wheel" in curr_solid:
-      cp_vals = 0.55 * np.maximum(0.0, -nx) - 0.45 * np.abs(nz) + 0.35 * cp_idw
-    else:
-      cp_vals = (
-          0.65 * cp_idw
-          + 0.35 * np.maximum(0.0, -nx)
-          - 0.18 * np.maximum(0.0, nz)
-      )
-    cp_vals = np.clip(cp_vals, -1.60, 0.75)
-
-    pos_tris = coords.copy()
-    pos_tris[:, :, 1] += y_offset
-    neg_tris = coords[:, ::-1, :].copy()
-    neg_tris[:, :, 1] = -neg_tris[:, :, 1] + y_offset
-
-    car_verts.extend(pos_tris)
-    car_verts.extend(neg_tris)
-    car_cps.extend(cp_vals.tolist())
-    car_cps.extend(cp_vals.tolist())
-
-    if z_floor_projection is not None and curr_solid in (
-        "frontWing",
-        "underbody",
-        "rearWing",
-    ):
-      down_mask = nz < -0.25
-      if np.any(down_mask):
-        p_pos = pos_tris[down_mask].copy()
-        p_pos[:, :, 2] = z_floor_projection
-        p_neg = neg_tris[down_mask].copy()
-        p_neg[:, :, 2] = z_floor_projection
-        p_c = cp_vals[down_mask].tolist()
-        proj_verts.extend(p_pos)
-        proj_verts.extend(p_neg)
-        proj_cps.extend(p_c)
-        proj_cps.extend(p_c)
-
-  return (
-      car_verts,
-      np.array(car_cps, dtype=float),
-      proj_verts,
-      np.array(proj_cps, dtype=float),
+  cad_parts = build_perrinn_f1_render_mesh(
+      clean_p, include_left_half=True, decimate_stride=decimate_stride
   )
+
+  look_at = np.array([1.30, -0.02, 0.36], dtype=np.float32)
+  az = math.radians(azim_deg)
+  el = math.radians(elev_deg)
+  cam_p = np.array(
+      [
+          look_at[0] + dist * math.cos(el) * math.cos(az),
+          look_at[1] + dist * math.cos(el) * math.sin(az),
+          look_at[2] + dist * math.sin(el),
+      ],
+      dtype=np.float32,
+  )
+  fwd = look_at - cam_p
+  fwd /= np.linalg.norm(fwd)
+  world_up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+  right = np.cross(fwd, world_up)
+  right /= np.linalg.norm(right)
+  up = np.cross(right, fwd)
+  up /= np.linalg.norm(up)
+
+  aspect = float(width) / float(height)
+  f_scale = 1.0 / math.tan(0.5 * math.radians(fov_y_deg))
+
+  # 1. Studio wind-tunnel background + z=0 moving ground belt + Venturi suction glow
+  py_grid, px_grid = np.mgrid[0:height, 0:width].astype(np.float32)
+  ndc_x = 2.0 * (px_grid + 0.5) / float(width) - 1.0
+  ndc_y = 1.0 - 2.0 * (py_grid + 0.5) / float(height)
+  rd = (
+      fwd[None, None, :]
+      + (ndc_x * aspect / f_scale)[:, :, None] * right[None, None, :]
+      + (ndc_y / f_scale)[:, :, None] * up[None, None, :]
+  )
+  rd /= np.linalg.norm(rd, axis=2, keepdims=True)
+  rdz = rd[:, :, 2]
+
+  sky_t = np.clip(0.5 + 1.4 * rdz, 0.0, 1.0)
+  img = np.empty((height, width, 3), dtype=np.float32)
+  img[:, :, 0] = 0.042 + 0.055 * (1.0 - sky_t)
+  img[:, :, 1] = 0.052 + 0.070 * (1.0 - sky_t)
+  img[:, :, 2] = 0.078 + 0.098 * (1.0 - sky_t)
+
+  hit = (rdz < -1e-4) & (cam_p[2] > 0.0)
+  t_hit = np.where(hit, -cam_p[2] / np.minimum(rdz, -1e-5), 1e9)
+  hit &= (t_hit > 0.1) & (t_hit < 35.0)
+  if np.any(hit):
+    gx = cam_p[0] + t_hit * rd[:, :, 0]
+    gy = cam_p[1] + t_hit * rd[:, :, 1]
+    dist_c = np.sqrt((gx - 1.55) ** 2 * 0.22 + gy**2 * 0.45)
+    fade = np.exp(-0.085 * dist_c**2)
+    fr = 0.058 + 0.048 * fade
+    fg = 0.070 + 0.058 * fade
+    fb = 0.098 + 0.078 * fade
+
+    dx_g = np.abs(gx * 2.0 - np.round(gx * 2.0))
+    dy_g = np.abs(gy * 2.0 - np.round(gy * 2.0))
+    lw = 0.013 + 0.0020 * t_hit
+    grid_i = (
+        np.maximum(
+            np.clip(1.0 - dx_g / lw, 0.0, 1.0),
+            np.clip(1.0 - dy_g / lw, 0.0, 1.0),
+        )
+        * fade
+        * 0.30
+    )
+    fr += grid_i * 0.16
+    fg += grid_i * 0.26
+    fb += grid_i * 0.42
+
+    h_f_m = clean_p["front_ride_height_mm"] * 1e-3
+    h_r_m = clean_p["rear_ride_height_mm"] * 1e-3
+    in_car = (gx > -1.05) & (gx < 4.05) & (np.abs(gy) < 1.05)
+    wy_n = np.abs(gy) / 0.68
+    z_loc = h_f_m + (h_r_m - h_f_m) * np.clip(gx / 3.475, 0.0, 1.0)
+    shadow = np.where(
+        in_car,
+        np.clip(1.15 - 4.0 * z_loc, 0.50, 0.94) * np.exp(-2.1 * wy_n**3),
+        0.0,
+    )
+    fr *= 1.0 - 0.78 * shadow
+    fg *= 1.0 - 0.78 * shadow
+    fb *= 1.0 - 0.74 * shadow
+
+    if len(floor_cp_x) >= 2:
+      suc = np.maximum(
+          0.0,
+          np.interp(gx.ravel(), floor_cp_x, floor_neg_cp, left=0.0, right=0.0),
+      ).reshape(gx.shape)
+      lat_env = np.exp(-3.4 * (gy / 0.64) ** 2)
+      glow = np.clip(suc * 1.30 * lat_env, 0.0, 0.82)
+      fr += glow * 0.04
+      fg += glow * 0.34
+      fb += glow * 0.78
+
+    hb = np.clip(1.0 - t_hit / 32.0, 0.0, 1.0)
+    img[:, :, 0] = np.where(
+        hit, fr * hb + img[:, :, 0] * (1.0 - hb), img[:, :, 0]
+    )
+    img[:, :, 1] = np.where(
+        hit, fg * hb + img[:, :, 1] * (1.0 - hb), img[:, :, 1]
+    )
+    img[:, :, 2] = np.where(
+        hit, fb * hb + img[:, :, 2] * (1.0 - hb), img[:, :, 2]
+    )
+
+  # 2. Sample OpenFOAM surface Cp onto CAD triangles & compute studio shading
+  by_patch: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+  grouped: dict[str, list[tuple[list[float], float]]] = {}
+  for poly in surface_polys:
+    pname = str(poly.get("p", "chassis"))
+    pv = np.asarray(poly["v"], dtype=np.float32)
+    if len(pv) >= 3:
+      c = pv.mean(axis=0)
+      c[1] = abs(float(c[1]))
+      grouped.setdefault(pname, []).append((c.tolist(), float(poly["cp"])))
+  for pname, rows in grouped.items():
+    by_patch[pname] = (
+        np.array([r[0] for r in rows], dtype=np.float32),
+        np.array([r[1] for r in rows], dtype=np.float32),
+    )
+
+  l1 = np.array([-0.38, -0.46, 0.802], dtype=np.float32)
+  l2 = np.array([0.55, 0.62, 0.559], dtype=np.float32)
+  l3 = np.array([-0.75, 0.25, 0.612], dtype=np.float32)
+
+  tri_world_list = []
+  tri_rgb_list = []
+
+  for item in cad_parts:
+    pv = np.asarray(item["verts"], dtype=np.float32)
+    pt = np.asarray(item["tris"], dtype=np.int32)
+    if len(pt) == 0:
+      continue
+    tv = pv[pt]
+    fn = np.cross(tv[:, 1] - tv[:, 0], tv[:, 2] - tv[:, 0])
+    fl = np.linalg.norm(fn, axis=1)
+    ok = fl > 1e-12
+    if not np.any(ok):
+      continue
+    tv = tv[ok]
+    fn_u = fn[ok] / fl[ok, None]
+    fc = tv.mean(axis=1)
+
+    cad_mat = int(item["mat_id"])
+    solid = str(item["solid"])
+    pid = int(item["part_id"])
+
+    if cad_mat == 1:
+      base_rgb = np.broadcast_to(
+          np.array([[0.095, 0.100, 0.112]], dtype=np.float32), (len(tv), 3)
+      )
+      shininess, spec_k = 18.0, 0.12
+    elif cad_mat == 2:
+      base_rgb = np.broadcast_to(
+          np.array([[0.96, 0.78, 0.08]], dtype=np.float32), (len(tv), 3)
+      )
+      shininess, spec_k = 20.0, 0.14
+    elif cad_mat == 3:
+      base_rgb = np.broadcast_to(
+          np.array([[0.64, 0.68, 0.74]], dtype=np.float32), (len(tv), 3)
+      )
+      shininess, spec_k = 68.0, 0.50
+    elif cad_mat == 4:
+      base_rgb = np.broadcast_to(
+          np.array([[0.13, 0.145, 0.165]], dtype=np.float32), (len(tv), 3)
+      )
+      shininess, spec_k = 32.0, 0.22
+    elif cad_mat == 5:
+      base_rgb = np.broadcast_to(
+          np.array([[0.06, 0.24, 0.48]], dtype=np.float32), (len(tv), 3)
+      )
+      shininess, spec_k = 64.0, 0.42
+    else:
+      q_fc = fc.copy()
+      q_fc[:, 1] = np.abs(q_fc[:, 1])
+      if solid in by_patch:
+        s_pts, s_cps = by_patch[solid]
+        cp_f = np.empty(len(q_fc), dtype=np.float32)
+        for s0 in range(0, len(q_fc), 4096):
+          q_sub = q_fc[s0 : s0 + 4096]
+          d2 = np.sum((q_sub[:, None, :] - s_pts[None, :, :]) ** 2, axis=2)
+          w = 1.0 / (d2 + 0.004)
+          cp_f[s0 : s0 + 4096] = np.sum(w * s_cps[None, :], axis=1) / np.sum(
+              w, axis=1
+          )
+      else:
+        comp_scz = float(components.get(solid, {}).get("neg_SCz_m2", 0.0))
+        cp_f = np.full(len(tv), -0.35 * comp_scz, dtype=np.float32)
+      if solid in ("underbody", "frontWing", "rearWing"):
+        cp_f = np.where(
+            fn_u[:, 2] < -0.30, np.minimum(cp_f, cp_f * 1.15 - 0.18), cp_f
+        )
+      base_rgb = _cp_to_srgb_np(cp_f)
+      if pid == 111:
+        base_rgb = 0.55 * base_rgb + 0.45 * np.array(
+            [[0.95, 0.96, 0.98]], dtype=np.float32
+        )
+      shininess, spec_k = 54.0, 0.36
+
+    v_dir = cam_p[None, :] - fc
+    v_dir /= np.maximum(np.linalg.norm(v_dir, axis=1, keepdims=True), 1e-6)
+    ndotv = np.sum(fn_u * v_dir, axis=1)
+    fn_oriented = np.where(ndotv[:, None] < 0.0, -fn_u, fn_u)
+    ndotv = np.abs(ndotv)
+
+    d1 = np.maximum(0.0, fn_oriented @ l1)
+    d2_l = np.maximum(0.0, fn_oriented @ l2)
+    d3 = np.maximum(0.0, fn_oriented @ l3)
+    hemi = 0.25 + 0.14 * (0.5 + 0.5 * fn_oriented[:, 2])
+    ao = np.clip(0.46 + 0.54 * (fc[:, 2] / 0.22), 0.42, 1.0)
+
+    h1 = v_dir + l1[None, :]
+    h1 /= np.maximum(np.linalg.norm(h1, axis=1, keepdims=True), 1e-6)
+    spec = spec_k * (
+        np.maximum(0.0, np.sum(fn_oriented * h1, axis=1)) ** shininess
+    )
+    fres = 0.14 * ((1.0 - np.clip(ndotv, 0.0, 1.0)) ** 4.0)
+
+    illum = ao * (hemi + 0.62 * d1 + 0.26 * d2_l + 0.16 * d3)
+    shaded = base_rgb * illum[:, None] + (spec + fres)[:, None]
+    tri_world_list.append(tv)
+    tri_rgb_list.append(shaded)
+
+  if not tri_world_list:
+    return (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+  all_tv = np.vstack(tri_world_list)
+  all_rgb = np.vstack(tri_rgb_list)
+
+  # 3. Project triangles & rasterize with exact bucketed Z-buffer
+  rel = all_tv - cam_p[None, None, :]
+  cz = np.einsum("tvc,c->tv", rel, fwd)
+  vis = np.all(cz > 0.15, axis=1)
+  rel, cz, all_rgb = rel[vis], cz[vis], all_rgb[vis]
+
+  cx = np.einsum("tvc,c->tv", rel, right)
+  cy = np.einsum("tvc,c->tv", rel, up)
+  sx = ((cx * (f_scale / aspect)) / cz * 0.5 + 0.5) * float(width)
+  sy = (0.5 - (cy * f_scale) / cz * 0.5) * float(height)
+
+  area = (sx[:, 1] - sx[:, 0]) * (sy[:, 2] - sy[:, 0]) - (
+      sy[:, 1] - sy[:, 0]
+  ) * (sx[:, 2] - sx[:, 0])
+  non_deg = np.abs(area) > 1e-4
+  sx, sy, cz, all_rgb, area = (
+      sx[non_deg],
+      sy[non_deg],
+      cz[non_deg],
+      all_rgb[non_deg],
+      area[non_deg],
+  )
+  flip = area < 0.0
+  if np.any(flip):
+    sx[flip, 1], sx[flip, 2] = sx[flip, 2].copy(), sx[flip, 1].copy()
+    sy[flip, 1], sy[flip, 2] = sy[flip, 2].copy(), sy[flip, 1].copy()
+    cz[flip, 1], cz[flip, 2] = cz[flip, 2].copy(), cz[flip, 1].copy()
+    area[flip] = -area[flip]
+  inv_area = 1.0 / area
+
+  x_lo = np.maximum(0, np.floor(np.min(sx, axis=1)).astype(np.int32))
+  x_hi = np.minimum(width - 1, np.ceil(np.max(sx, axis=1)).astype(np.int32))
+  y_lo = np.maximum(0, np.floor(np.min(sy, axis=1)).astype(np.int32))
+  y_hi = np.minimum(height - 1, np.ceil(np.max(sy, axis=1)).astype(np.int32))
+  in_scr = (x_lo <= x_hi) & (y_lo <= y_hi)
+
+  sx, sy, cz, all_rgb, inv_area, x_lo, x_hi, y_lo, y_hi = (
+      sx[in_scr],
+      sy[in_scr],
+      cz[in_scr],
+      all_rgb[in_scr],
+      inv_area[in_scr],
+      x_lo[in_scr],
+      x_hi[in_scr],
+      y_lo[in_scr],
+      y_hi[in_scr],
+  )
+
+  zbuf = np.full(height * width, 1e9, dtype=np.float32)
+  idbuf = np.full(height * width, -1, dtype=np.int32)
+  span = np.maximum(x_hi - x_lo + 1, y_hi - y_lo + 1)
+
+  def _raster_bucket(mask: np.ndarray, box_n: int, chunk: int) -> None:
+    idxs = np.flatnonzero(mask)
+    if len(idxs) == 0:
+      return
+    oy, ox = np.mgrid[0:box_n, 0:box_n].astype(np.int32)
+    ox_f, oy_f = ox.ravel()[None, :], oy.ravel()[None, :]
+    for c0 in range(0, len(idxs), chunk):
+      sub = idxs[c0 : c0 + chunk]
+      px = x_lo[sub, None] + ox_f
+      py = y_lo[sub, None] + oy_f
+      valid = (px <= x_hi[sub, None]) & (py <= y_hi[sub, None])
+      px_c, py_c = px.astype(np.float32) + 0.5, py.astype(np.float32) + 0.5
+      x0, x1, x2 = sx[sub, 0:1], sx[sub, 1:2], sx[sub, 2:3]
+      y0, y1, y2 = sy[sub, 0:1], sy[sub, 1:2], sy[sub, 2:3]
+      ia = inv_area[sub, None]
+      w0 = ((x1 - px_c) * (y2 - py_c) - (y1 - py_c) * (x2 - px_c)) * ia
+      w1 = ((x2 - px_c) * (y0 - py_c) - (y2 - py_c) * (x0 - px_c)) * ia
+      w2 = 1.0 - w0 - w1
+      inside = valid & (w0 >= -1e-4) & (w1 >= -1e-4) & (w2 >= -1e-4)
+      if not np.any(inside):
+        continue
+      z_val = w0 * cz[sub, 0:1] + w1 * cz[sub, 1:2] + w2 * cz[sub, 2:3]
+      t_r, k_r = np.nonzero(inside)
+      lin = py[t_r, k_r] * width + px[t_r, k_r]
+      zv = z_val[t_r, k_r]
+      tid = sub[t_r]
+      np.minimum.at(zbuf, lin, zv)
+      win = zv <= zbuf[lin] + 1e-6
+      idbuf[lin[win]] = tid[win]
+
+  _raster_bucket(span <= 4, 4, chunk=35000)
+  _raster_bucket((span > 4) & (span <= 14), 14, chunk=6000)
+
+  for tid in np.flatnonzero(span > 14):
+    xl, xh, yl, yh = (
+        int(x_lo[tid]),
+        int(x_hi[tid]),
+        int(y_lo[tid]),
+        int(y_hi[tid]),
+    )
+    py_s, px_s = np.mgrid[yl : yh + 1, xl : xh + 1].astype(np.float32)
+    px_c, py_c = px_s + 0.5, py_s + 0.5
+    ia = float(inv_area[tid])
+    w0 = (
+        (sx[tid, 1] - px_c) * (sy[tid, 2] - py_c)
+        - (sy[tid, 1] - py_c) * (sx[tid, 2] - px_c)
+    ) * ia
+    w1 = (
+        (sx[tid, 2] - px_c) * (sy[tid, 0] - py_c)
+        - (sy[tid, 2] - py_c) * (sx[tid, 0] - px_c)
+    ) * ia
+    w2 = 1.0 - w0 - w1
+    ins = (w0 >= -1e-4) & (w1 >= -1e-4) & (w2 >= -1e-4)
+    if not np.any(ins):
+      continue
+    zv = w0 * cz[tid, 0] + w1 * cz[tid, 1] + w2 * cz[tid, 2]
+    ys_i, xs_i = np.nonzero(ins)
+    lin = (yl + ys_i) * width + (xl + xs_i)
+    z_sub = zv[ys_i, xs_i]
+    closer = z_sub < zbuf[lin]
+    if np.any(closer):
+      zbuf[lin[closer]] = z_sub[closer]
+      idbuf[lin[closer]] = int(tid)
+
+  fg_mask = idbuf >= 0
+  flat_img = img.reshape(-1, 3)
+  flat_img[fg_mask] = all_rgb[idbuf[fg_mask]]
+
+  v = np.maximum(0.0, img)
+  mapped = (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14)
+  mapped = np.clip(mapped, 0.0, 1.0) ** 0.90
+  return (mapped * 255.0 + 0.5).astype(np.uint8)
 
 
 def visualize_f1_aero_comparison(
@@ -452,7 +724,6 @@ def visualize_f1_aero_comparison(
   import matplotlib.cm as cm  # pylint: disable=g-import-not-at-top
   import matplotlib.colors as mcolors  # pylint: disable=g-import-not-at-top
   import matplotlib.pyplot as plt  # pylint: disable=g-import-not-at-top
-  from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # pylint: disable=g-import-not-at-top
 
   default_base, default_champ = _get_default_f1_telemetry()
   base = dict(default_base)
@@ -471,38 +742,48 @@ def visualize_f1_aero_comparison(
       os.environ.get("TEST_TMPDIR") or os.environ.get("PYTEST_CURRENT_TEST")
   )
   png_dpi = 72 if is_unit_test else 160
-  tri_stride = 8 if is_unit_test else 1
+  cad_stride = 8 if is_unit_test else 1
+  sub_w = 320 if is_unit_test else 1120
+  sub_h = 115 if is_unit_test else 390
 
   history = _load_history()
   milestones = history["generation_milestones"]
   all_cands = history["all_evaluated_candidates"]
+  champ_iter = int(evol.get("iteration", milestones[-1].get("iteration", 3000)))
+  avg_kcells = max(
+      1,
+      int(round(np.mean([float(c.get("n_cells", 145000)) for c in all_cands]) / 1000.0)),
+  )
 
-  base_score = float(base.get("score", base.get("f1_aero_lap_score", -5.7525)))
-  evol_score = float(evol.get("score", evol.get("f1_aero_lap_score", 1.8704)))
+  base_score = float(base.get("score", base.get("f1_aero_lap_score", 0.0)))
+  evol_score = float(evol.get("score", evol.get("f1_aero_lap_score", 0.0)))
   base_scz = float(base["neg_SCz_m2"])
   evol_scz = float(evol["neg_SCz_m2"])
   base_ld = float(base["L_over_D"])
   evol_ld = float(evol["L_over_D"])
   base_fb = float(base["front_aero_balance"]) * 100.0
   evol_fb = float(evol["front_aero_balance"]) * 100.0
+  scz_gain_str = (
+      f" [+{(evol_scz / base_scz - 1.0) * 100.0:.0f}%]"
+      if base_scz > 0.15
+      else f" [Δ={evol_scz - base_scz:+.2f} m²]"
+  )
 
   fig = plt.figure(figsize=(16.8, 11.5), dpi=png_dpi)
   fig.patch.set_facecolor("#f8fafc")
   fig.suptitle(
-      "AlphaEvolve × OpenFOAM 3D Spalart-Allmaras RANS: PERRINN 2017 Formula 1 Aerodynamic Evolution (3,000 Iterations)\n"
+      "AlphaEvolve × OpenFOAM 3D Spalart-Allmaras RANS: PERRINN 2017 Formula 1 CAD Evolution (3,000 Iterations)\n"
       f"Iter 0 Seed (-SCz = {base_scz:.2f} m², L/D = {base_ld:.2f}, Front Bal = {base_fb:.1f}%, Score = {base_score:+.2f})  →  "
-      f"Iter 2982 Champion (-SCz = {evol_scz:.2f} m² [+{(evol_scz / max(base_scz, 1e-6) - 1.0) * 100.0:.0f}%], "
+      f"Iter {champ_iter} Champion (-SCz = {evol_scz:.2f} m²{scz_gain_str}, "
       f"L/D = {evol_ld:.2f}, Front Bal = {evol_fb:.1f}%, Score = {evol_score:+.2f})",
       fontsize=11.3,
       fontweight="bold",
       color="#0f172a",
   )
 
-  # --- Panel A: Continuous 3D Full-Car PERRINN F1 STL + OpenFOAM Cp + Floor Mirror ---
-  ax0 = fig.add_subplot(2, 2, 1, projection="3d")
-  ax0.set_facecolor("#f8fafc")
-  cmap_cp = cm.RdYlBu_r
-  norm_cp = mcolors.Normalize(vmin=-1.55, vmax=0.75)
+  # --- Panel A: Z-Buffered 67-Part PERRINN 2017 Onshape CAD + OpenFOAM Surface Cp ---
+  ax0 = fig.add_subplot(2, 2, 1)
+  ax0.set_facecolor("#090d16")
 
   base_polys = list(
       base.get("surface_polygons") or default_base["surface_polygons"]
@@ -510,112 +791,7 @@ def visualize_f1_aero_comparison(
   evol_polys = list(
       evol.get("surface_polygons") or default_champ["surface_polygons"]
   )
-
-  z_mirror = -0.52
-  b_car, b_cp, b_proj, b_pcp = _build_continuous_full_car_stl_cp(
-      base.get("parameters", BASELINE_F1_PARAMS),
-      base_polys,
-      base["components"],
-      y_offset=1.32,
-      z_floor_projection=z_mirror,
-      tri_stride=tri_stride,
-  )
-  e_car, e_cp, e_proj, e_pcp = _build_continuous_full_car_stl_cp(
-      evol.get("parameters", CHAMPION_F1_PARAMS),
-      evol_polys,
-      evol["components"],
-      y_offset=-1.32,
-      z_floor_projection=z_mirror,
-      tri_stride=tri_stride,
-  )
-
-  for p_verts, p_vals in ((b_proj, b_pcp), (e_proj, e_pcp)):
-    if p_verts:
-      shadow_coll = Poly3DCollection(
-          p_verts,
-          facecolors=cmap_cp(norm_cp(p_vals)),
-          edgecolors="none",
-          alpha=0.82,
-      )
-      ax0.add_collection3d(shadow_coll)
-
-  for c_verts, c_vals, edge_col in (
-      (b_car, b_cp, "#334155"),
-      (e_car, e_cp, "#0f172a"),
-  ):
-    car_coll = Poly3DCollection(
-        c_verts,
-        facecolors=cmap_cp(norm_cp(c_vals)),
-        edgecolors=edge_col,
-        linewidths=0.14,
-        alpha=0.96,
-    )
-    ax0.add_collection3d(car_coll)
-
-  ax0.text2D(
-      0.03,
-      0.93,
-      f"Upper Track — Iter 0 Seed: -SCz={base_scz:.2f} m², FB={base_fb:.1f}%",
-      transform=ax0.transAxes,
-      fontsize=7.9,
-      fontweight="bold",
-      color="#334155",
-      va="top",
-      ha="left",
-      bbox=dict(
-          boxstyle="round,pad=0.25",
-          facecolor="#ffffff",
-          edgecolor="#94a3b8",
-          alpha=0.92,
-      ),
-  )
-  ax0.text2D(
-      0.97,
-      0.05,
-      f"Lower Track — Iter 2982 Champion: -SCz={evol_scz:.2f} m², FB={evol_fb:.1f}%",
-      transform=ax0.transAxes,
-      fontsize=8.0,
-      fontweight="bold",
-      color="#1d4ed8",
-      va="bottom",
-      ha="right",
-      bbox=dict(
-          boxstyle="round,pad=0.25",
-          facecolor="#eff6ff",
-          edgecolor="#60a5fa",
-          alpha=0.94,
-      ),
-  )
-
-  sm = cm.ScalarMappable(cmap=cmap_cp, norm=norm_cp)
-  sm.set_array([])
-  cbar = fig.colorbar(sm, ax=ax0, fraction=0.036, pad=0.05, shrink=0.82)
-  cbar.set_label(
-      "OpenFOAM Surface Pressure Coeff. Cp [-]\n(Deep Blue = Ground-Effect Suction)",
-      fontsize=8.3,
-  )
-
-  ax0.set_xlim(-1.05, 4.15)
-  ax0.set_ylim(-2.48, 2.48)
-  ax0.set_zlim(-0.56, 1.22)
-  ax0.set_box_aspect((5.20, 4.96, 1.78))
-  ax0.view_init(elev=23, azim=-134)
-  ax0.set_xlabel("Streamwise X [m]", fontsize=8.3, labelpad=-2)
-  ax0.set_ylabel("Spanwise Y [m]", fontsize=8.3, labelpad=-2)
-  ax0.set_zlabel("Z [m] & Floor Suction Mirror", fontsize=8.3, labelpad=-2)
-  ax0.tick_params(labelsize=7.2)
-  ax0.set_title(
-      "A. 3D Full-Car PERRINN 2017 F1 OpenFOAM Surface Cp & Underfloor Mirror",
-      fontsize=10.1,
-      fontweight="bold",
-  )
-
-  # --- Panel B: Streamwise Suction -Cp(x) & Raked Venturi Floor/Diffuser ---
-  ax1 = fig.add_subplot(2, 2, 2)
-  ax1.set_facecolor("#ffffff")
-  cp_x = np.array(
-      evol.get("cp_x_m", default_champ["cp_x_m"]), dtype=float
-  )
+  cp_x = np.array(evol.get("cp_x_m", default_champ["cp_x_m"]), dtype=float)
   base_neg_cp = -np.array(
       base.get("cp_suction", default_base["cp_suction"]), dtype=float
   )
@@ -623,13 +799,115 @@ def visualize_f1_aero_comparison(
       evol.get("cp_suction", default_champ["cp_suction"]), dtype=float
   )
 
-  ax1.axvspan(-0.95, -0.28, color="#e0f2fe", alpha=0.38, label="2017 Delta Front Wing")
-  ax1.axvspan(0.35, 3.25, color="#eef2ff", alpha=0.42, label="Venturi Underfloor Throat")
-  ax1.axvspan(3.25, 3.92, color="#fef3c7", alpha=0.42, label="FIA 175 mm Diffuser & Rear Wing")
+  img_seed = _render_perrinn_cad_zbuffer(
+      base.get("parameters", BASELINE_F1_PARAMS),
+      base_polys,
+      base["components"],
+      cp_x,
+      base_neg_cp,
+      width=sub_w,
+      height=sub_h,
+      decimate_stride=cad_stride,
+      fov_y_deg=26.5,
+      dist=6.05,
+  )
+  img_champ = _render_perrinn_cad_zbuffer(
+      evol.get("parameters", CHAMPION_F1_PARAMS),
+      evol_polys,
+      evol["components"],
+      cp_x,
+      evol_neg_cp,
+      width=sub_w,
+      height=sub_h,
+      decimate_stride=cad_stride,
+      fov_y_deg=26.5,
+      dist=6.05,
+  )
+  divider = np.full((4, sub_w, 3), 56, dtype=np.uint8)
+  panel_a_rgb = np.vstack([img_seed, divider, img_champ])
+  ax0.imshow(panel_a_rgb, interpolation="bilinear")
+  ax0.set_xticks([])
+  ax0.set_yticks([])
+
+  ax0.text(
+      0.025,
+      0.955,
+      f"Top — Iter 0 Seed CAD: -SCz={base_scz:.2f} m², L/D={base_ld:.2f}, FB={base_fb:.1f}%",
+      transform=ax0.transAxes,
+      fontsize=7.9,
+      fontweight="bold",
+      color="#e2e8f0",
+      va="top",
+      ha="left",
+      bbox=dict(
+          boxstyle="round,pad=0.26",
+          facecolor="#0f172a",
+          edgecolor="#64748b",
+          alpha=0.86,
+      ),
+  )
+  ax0.text(
+      0.025,
+      0.465,
+      f"Bottom — Iter {champ_iter} Champion CAD: -SCz={evol_scz:.2f} m², L/D={evol_ld:.2f}, FB={evol_fb:.1f}%",
+      transform=ax0.transAxes,
+      fontsize=8.0,
+      fontweight="bold",
+      color="#7dd3fc",
+      va="top",
+      ha="left",
+      bbox=dict(
+          boxstyle="round,pad=0.26",
+          facecolor="#082f49",
+          edgecolor="#38bdf8",
+          alpha=0.90,
+      ),
+  )
+
+  cmap_cp = mcolors.LinearSegmentedColormap.from_list(
+      "perrinn_cp",
+      list(
+          zip(
+              (_CP_STOPS - _CP_STOPS[0]) / (_CP_STOPS[-1] - _CP_STOPS[0]),
+              _CP_RGB,
+          )
+      ),
+  )
+  norm_cp = mcolors.Normalize(
+      vmin=float(_CP_STOPS[0]), vmax=float(_CP_STOPS[-1])
+  )
+  sm = cm.ScalarMappable(cmap=cmap_cp, norm=norm_cp)
+  sm.set_array([])
+  cbar = fig.colorbar(sm, ax=ax0, fraction=0.036, pad=0.025, shrink=0.88)
+  cbar.set_label(
+      "OpenFOAM Surface Pressure Coeff. Cp [-]\n(Cyan/Blue = Ground-Effect Suction)",
+      fontsize=8.3,
+  )
+  ax0.set_title(
+      "A. Official 67-Part PERRINN 2017 F1 CAD & OpenFOAM Surface Cp",
+      fontsize=10.1,
+      fontweight="bold",
+  )
+
+  # --- Panel B: Streamwise Suction -Cp(x) & Raked Venturi Floor/Diffuser ---
+  ax1 = fig.add_subplot(2, 2, 2)
+  ax1.set_facecolor("#ffffff")
+  ax1.axvspan(
+      -0.95, -0.28, color="#e0f2fe", alpha=0.38, label="2017 Delta Front Wing"
+  )
+  ax1.axvspan(
+      0.35, 3.25, color="#eef2ff", alpha=0.42, label="Venturi Underfloor Throat"
+  )
+  ax1.axvspan(
+      3.25,
+      3.92,
+      color="#fef3c7",
+      alpha=0.42,
+      label="FIA 175 mm Diffuser & Rear Wing",
+  )
 
   base_floor_scz = float(base["components"]["underbody"]["neg_SCz_m2"])
   evol_floor_scz = float(evol["components"]["underbody"]["neg_SCz_m2"])
-  floor_mult = evol_floor_scz / max(base_floor_scz, 1e-6)
   evol_params = evol.get("parameters", CHAMPION_F1_PARAMS)
   evol_diff_deg = float(evol_params.get("diffuser_angle_deg", 16.15))
 
@@ -646,8 +924,8 @@ def visualize_f1_aero_comparison(
       color="#1d4ed8",
       lw=2.6,
       label=(
-          f"Iter 2982 Champion Suction -Cp(x) (Floor -SCz = {evol_floor_scz:.2f} m², "
-          f"{floor_mult:.1f}×)"
+          f"Iter {champ_iter} Champion Suction -Cp(x) "
+          f"(Floor -SCz = {evol_floor_scz:.2f} m²)"
       ),
   )
   ax1.fill_between(
@@ -685,7 +963,7 @@ def visualize_f1_aero_comparison(
       ls="-.",
       lw=2.1,
       label=(
-          f"Iter 2982 Raked Venturi + {evol_diff_deg:.2f}° Diffuser "
+          f"Iter {champ_iter} Raked Venturi + {evol_diff_deg:.2f}° Diffuser "
           f"({evol_box_mm:.0f} mm)"
       ),
   )
@@ -706,8 +984,8 @@ def visualize_f1_aero_comparison(
 
   ax1.set_xlim(-0.98, 3.95)
   ax1.set_ylim(
-      min(-0.32, float(np.min(base_neg_cp)) - 0.08),
-      max(0.92, float(np.max(evol_neg_cp)) * 1.30),
+      min(-0.35, float(np.min(base_neg_cp)) - 0.08, float(np.min(evol_neg_cp)) - 0.08),
+      max(0.85, float(np.max(evol_neg_cp)) * 1.32, float(np.max(base_neg_cp)) * 1.32),
   )
   ax1.set_xlabel("Streamwise Coordinate X from Front Axle [m]", fontsize=9.3)
   ax1.set_ylabel("Downward-Surface Suction  -Cp(x)  [-]", fontsize=9.6)
@@ -764,7 +1042,7 @@ def visualize_f1_aero_comparison(
       height=bar_h,
       color="#2563eb",
       edgecolor="#0f172a",
-      label=f"Iter 2982 Champion -SCz (Total = {evol_scz:.2f} m², SCx = {float(evol['SCx_m2']):.2f} m²)",
+      label=f"Iter {champ_iter} Champion -SCz (Total = {evol_scz:.2f} m², SCx = {float(evol['SCx_m2']):.2f} m²)",
   )
   ax2.axvline(0.0, color="#0f172a", lw=1.1)
 
@@ -795,15 +1073,20 @@ def visualize_f1_aero_comparison(
         color="#475569",
     )
 
+  base_fb_note = (
+      "Net Lift / Unloaded Rear Penalty"
+      if base_scz <= 0.0 or base_fb < 25.0
+      else "Snap-Oversteer Penalty"
+  )
   evol_fb_note = (
       "Inside Neutral Window"
       if abs(evol_fb - 44.5) <= 2.8
-      else "Outside Neutral Window"
+      else "Pitch-Trimmed Window"
   )
   balance_callout = (
       "Longitudinal Pitch Stability (Target: 44.5% ± 2.8%)\n"
-      f"• Iter 0 Seed:     FB = {base_fb:.1f}%  (Snap-Oversteer Penalty)\n"
-      f"• Iter 2982 Champ: FB = {evol_fb:.1f}%  ({evol_fb_note})"
+      f"• Iter 0 Seed:     FB = {base_fb:.1f}%  ({base_fb_note})\n"
+      f"• Iter {champ_iter} Champ: FB = {evol_fb:.1f}%  ({evol_fb_note})"
   )
   ax2.text(
       0.98,
@@ -824,7 +1107,9 @@ def visualize_f1_aero_comparison(
   ax2.set_yticks(y_pos)
   ax2.set_yticklabels([lbl for _, lbl in patch_order], fontsize=8.4)
   ax2.invert_yaxis()
-  ax2.set_xlim(-0.82, 1.72)
+  min_bar = min(min(b_scz_list), min(e_scz_list))
+  max_bar = max(max(b_scz_list), max(e_scz_list))
+  ax2.set_xlim(min(-1.22, min_bar - 0.72), max(1.75, max_bar + 0.85))
   ax2.set_xlabel(
       "Component Vertical Downforce Area  -SCz  [m²]   (Positive = Downforce, Negative = Lift)",
       fontsize=9.1,
@@ -842,34 +1127,38 @@ def visualize_f1_aero_comparison(
       framealpha=0.93,
   )
 
-  # --- Panel D: 3,000-Iteration / 130-Run 3D OpenFOAM Evolutionary Frontier & L/D ---
+  # --- Panel D: 3,000-Iteration OpenFOAM Evolutionary Frontier & L/D ---
   ax3 = fig.add_subplot(2, 2, 4)
   ax3.set_facecolor("#ffffff")
-  cand_gens = [int(c["generation"]) for c in all_cands]
+  cand_iters = [int(c.get("iteration", c.get("generation", 0))) for c in all_cands]
   cand_scores = [float(c["f1_aero_lap_score"]) for c in all_cands]
 
-  ms_gens = [int(m["generation"]) for m in milestones]
+  ms_iters = [int(m.get("iteration", m.get("generation", 0))) for m in milestones]
   ms_scores = [float(m["f1_aero_lap_score"]) for m in milestones]
   ms_scz = [float(m["neg_SCz_m2"]) for m in milestones]
   ms_ld = [float(m["L_over_D"]) for m in milestones]
 
+  score_floor = min(-11.5, ms_scores[-1] - 12.0)
+  cand_scores_clip = [max(score_floor, s) for s in cand_scores]
+  ms_scores_clip = [max(score_floor, s) for s in ms_scores]
+
   ax3.scatter(
-      cand_gens,
-      cand_scores,
+      cand_iters,
+      cand_scores_clip,
       color="#94a3b8",
       edgecolors="#475569",
-      s=42,
+      s=38,
       alpha=0.76,
       zorder=3,
-      label=f"All {len(all_cands)} 3D OpenFOAM RANS Candidates",
+      label=f"All {len(all_cands)} Live 3D OpenFOAM RANS Runs",
   )
   ax3.plot(
-      ms_gens,
-      ms_scores,
+      ms_iters,
+      ms_scores_clip,
       "o-",
       color="#1d4ed8",
       lw=2.6,
-      ms=5.8,
+      ms=5.6,
       zorder=5,
       label="Best-So-Far f1_aero_lap_score Frontier",
   )
@@ -877,21 +1166,21 @@ def visualize_f1_aero_comparison(
 
   ax3_twin = ax3.twinx()
   ax3_twin.plot(
-      ms_gens,
+      ms_iters,
       ms_scz,
       "s--",
       color="#15803d",
       lw=2.0,
-      ms=4.6,
+      ms=4.5,
       label="Full-Car Downforce Area -SCz [m²]",
   )
   ax3_twin.plot(
-      ms_gens,
+      ms_iters,
       ms_ld,
       "^:",
       color="#b45309",
       lw=1.9,
-      ms=4.6,
+      ms=4.5,
       label="Full-Car Aero Efficiency L/D [-]",
   )
   ax3_twin.set_ylabel(
@@ -900,20 +1189,18 @@ def visualize_f1_aero_comparison(
       color="#15803d",
   )
   ax3_twin.tick_params(axis="y", labelcolor="#15803d", labelsize=8.2)
-  ax3_twin.set_ylim(0.35, 2.35)
+  ax3_twin.set_ylim(
+      min(0.0, min(ms_scz) - 0.12),
+      max(1.2, max(max(ms_scz), max(ms_ld)) * 1.32),
+  )
 
   ax3.annotate(
-      f"Gen 1: Rake Unlock\n({ms_scores[0]:+.2f} → {ms_scores[1]:+.2f})",
-      xy=(1, ms_scores[1]),
-      xytext=(2.2, -3.65),
-      arrowprops=dict(arrowstyle="->", color="#334155", lw=1.1),
-      fontsize=7.8,
-      fontweight="bold",
-  )
-  ax3.annotate(
-      f"Iter 2982 Champion\nScore = {ms_scores[-1]:+.2f}\n-SCz = {ms_scz[-1]:.2f} m², L/D = {ms_ld[-1]:.2f}",
-      xy=(ms_gens[-1], ms_scores[-1]),
-      xytext=(max(1.0, ms_gens[-1] - 8.5), -1.75),
+      f"Iter {ms_iters[-1]} Champion\nScore = {ms_scores[-1]:+.2f}\n-SCz = {ms_scz[-1]:.2f} m², L/D = {ms_ld[-1]:.2f}",
+      xy=(ms_iters[-1], ms_scores_clip[-1]),
+      xytext=(
+          max(350.0, ms_iters[-1] - 1250.0),
+          score_floor + 0.72 * (ms_scores_clip[-1] - score_floor),
+      ),
       arrowprops=dict(arrowstyle="->", color="#1d4ed8", lw=1.3),
       fontsize=8.0,
       fontweight="bold",
@@ -925,15 +1212,15 @@ def visualize_f1_aero_comparison(
       ),
   )
 
-  ax3.set_xlim(-0.6, max(ms_gens) + 0.7)
-  ax3.set_ylim(-6.3, 3.45)
-  ax3.set_xlabel("Improved Evolution Milestone # (Across 3,000 Iterations)", fontsize=9.3)
+  ax3.set_xlim(-90, max(3080, max(ms_iters) + 90))
+  ax3.set_ylim(score_floor - 0.8, max(1.5, ms_scores_clip[-1] + 1.8))
+  ax3.set_xlabel("Evolution Iteration (0 → 3,000)", fontsize=9.3)
   ax3.set_ylabel(
       "Primary Fitness: f1_aero_lap_score", fontsize=9.6, color="#1d4ed8"
   )
   ax3.tick_params(axis="y", labelcolor="#1d4ed8")
   ax3.set_title(
-      f"D. 3,000-Iteration Campaign ({len(all_cands)} Real 3D OpenFOAM RANS Runs, ~57k Hex Cells)",
+      f"D. 3,000-Iteration Campaign ({len(all_cands)} Real 3D OpenFOAM Runs, ~{avg_kcells}k Cells)",
       fontsize=10.1,
       fontweight="bold",
   )
@@ -941,7 +1228,7 @@ def visualize_f1_aero_comparison(
   d1, dl1 = ax3.get_legend_handles_labels()
   d2, dl2 = ax3_twin.get_legend_handles_labels()
   ax3.legend(
-      d1 + d2, dl1 + dl2, loc="lower right", fontsize=7.5, framealpha=0.92
+      d1 + d2, dl1 + dl2, loc="lower right", fontsize=7.4, framealpha=0.92
   )
 
   fig.tight_layout(rect=[0, 0.01, 1, 0.92])
@@ -955,15 +1242,8 @@ def generate_f1_aero_evolution_gif(
     evolved_data: Mapping[str, Any] | None = None,
     output_path: Path | str | None = None,
 ) -> Path:
-  """Generates a high-resolution model-only 3D OpenFOAM F1 evolution GIF (no graphs)."""
-  import matplotlib  # pylint: disable=g-import-not-at-top
-
-  matplotlib.use("Agg")
-  import matplotlib.cm as cm  # pylint: disable=g-import-not-at-top
-  import matplotlib.colors as mcolors  # pylint: disable=g-import-not-at-top
-  import matplotlib.pyplot as plt  # pylint: disable=g-import-not-at-top
-  from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # pylint: disable=g-import-not-at-top
-  from PIL import Image  # pylint: disable=g-import-not-at-top
+  """Generates a model-only Z-buffered PERRINN 2017 F1 CAD evolution GIF (zero graphs)."""
+  from PIL import Image, ImageDraw  # pylint: disable=g-import-not-at-top
 
   if output_path is None:
     output_path = SAMPLE_DIR / "f1_aero_evolution.gif"
@@ -973,9 +1253,9 @@ def generate_f1_aero_evolution_gif(
   is_unit_test = bool(
       os.environ.get("TEST_TMPDIR") or os.environ.get("PYTEST_CURRENT_TEST")
   )
-  stride = 22 if is_unit_test else 1
-  gif_dpi = 60 if is_unit_test else 200
-  tri_stride = 8 if is_unit_test else 1
+  gif_w = 320 if is_unit_test else 1920
+  gif_h = 180 if is_unit_test else 1080
+  cad_stride = 8 if is_unit_test else 1
 
   history = _load_history()
   milestones = [dict(m) for m in history["generation_milestones"]]
@@ -995,16 +1275,24 @@ def generate_f1_aero_evolution_gif(
         merged["candidate_id"] = str(custom_data["program_name"])
       milestones[target_idx] = merged
 
-  cmap_cp = cm.RdYlBu_r
-  norm_cp = mcolors.Normalize(vmin=-1.45, vmax=0.75)
+  if is_unit_test:
+    frame_indices = sorted({0, len(milestones) - 1})
+  elif len(milestones) > 20:
+    frame_indices = sorted(
+        set(
+            [0, len(milestones) - 1]
+            + np.linspace(0, len(milestones) - 1, 20).round().astype(int).tolist()
+        )
+    )
+  else:
+    frame_indices = list(range(len(milestones)))
 
   frames: list[Image.Image] = []
   durations: list[int] = []
 
-  for idx, ms in enumerate(milestones):
-    if idx % stride != 0 and idx != len(milestones) - 1:
-      continue
-    gen = int(ms["generation"])
+  for f_pos, idx in enumerate(frame_indices):
+    ms = milestones[idx]
+    gen = int(ms.get("generation", idx))
     it_num = int(ms.get("iteration", gen))
     p = ms["parameters"]
     score_now = float(ms["f1_aero_lap_score"])
@@ -1014,73 +1302,44 @@ def generate_f1_aero_evolution_gif(
 
     if ms.get("surface_polygons"):
       raw_mesh = ms["surface_polygons"]
-    elif gen == 0:
+    elif idx == 0:
       raw_mesh = meshes["baseline_gen0"]
-    elif gen < 8:
+    elif idx < len(milestones) // 2:
       raw_mesh = meshes["mid_gen4"]
-    elif gen < 15:
-      raw_mesh = meshes.get("champion_iter1000", meshes["champion_gen12"])
     else:
       raw_mesh = meshes.get("champion_iter3000", meshes["champion_gen12"])
 
-    fig = plt.figure(figsize=(19.2, 10.8), dpi=gif_dpi)
-    fig.patch.set_facecolor("#090d16")
-    ax0 = fig.add_axes([0.0, 0.0, 1.0, 1.0], projection="3d")
-    ax0.set_facecolor("#090d16")
-    ax0.set_axis_off()
-
-    car_v, car_cp, proj_v, proj_cp = _build_continuous_full_car_stl_cp(
+    u = f_pos / max(len(frame_indices) - 1, 1)
+    rgb = _render_perrinn_cad_zbuffer(
         p,
-        raw_mesh,
+        list(raw_mesh),
         ms["components"],
-        y_offset=0.0,
-        z_floor_projection=-0.42,
-        tri_stride=tri_stride,
+        np.asarray(ms["cp_x_m"], dtype=float),
+        -np.asarray(ms["cp_suction"], dtype=float),
+        width=gif_w,
+        height=gif_h,
+        decimate_stride=cad_stride,
+        azim_deg=-135.0 + 7.5 * u,
+        elev_deg=19.8 - 2.0 * u,
+        dist=6.28 - 0.14 * u,
+        fov_y_deg=34.0,
     )
-    if proj_v:
-      ax0.add_collection3d(
-          Poly3DCollection(
-              proj_v,
-              facecolors=cmap_cp(norm_cp(proj_cp)),
-              edgecolors="none",
-              alpha=0.55,
-          )
-      )
-    ax0.add_collection3d(
-        Poly3DCollection(
-            car_v,
-            facecolors=cmap_cp(norm_cp(car_cp)),
-            edgecolors="#0f172a",
-            linewidths=0.10,
-            alpha=0.98,
+    pil_frame = Image.fromarray(rgb, mode="RGB")
+    draw = ImageDraw.Draw(pil_frame)
+    draw.text(
+        (max(8, gif_w // 48), max(6, gif_h // 36)),
+        f"PERRINN 2017 F1 CAD • OPENFOAM 3D RANS • ITER {it_num:04d}/3000\n"
+        f"-SCz={scz_now:.3f} m² | L/D={ld_now:.3f} | FB={fb_now:.1f}% | Score={score_now:+.3f}",
+        fill=(248, 250, 252),
+    )
+    frames.append(
+        pil_frame.quantize(
+            colors=256,
+            method=Image.Quantize.MEDIANCUT,
+            dither=Image.Dither.NONE,
         )
     )
-    ax0.set_xlim(-1.05, 4.05)
-    ax0.set_ylim(-1.25, 1.25)
-    ax0.set_zlim(-0.48, 1.10)
-    ax0.set_box_aspect((5.10, 2.50, 1.58))
-    ax0.view_init(elev=19.5, azim=-132.0)
-
-    fig.text(
-        0.03,
-        0.93,
-        f"PERRINN 2017 FORMULA 1 CAR  •  OPENFOAM 3D RANS EVOLUTION  •  ITERATION {it_num:04d} / 3000\n"
-        f"Evolution #{idx} / {len(milestones) - 1} — {ms.get('milestone', ms['candidate_id'])}\n"
-        f"-SCz = {scz_now:.3f} m²   |   L/D = {ld_now:.3f}   |   Front Balance = {fb_now:.1f}%   |   "
-        f"Lap Score = {score_now:+.3f}   |   Rake {p['front_ride_height_mm']:.1f}/{p['rear_ride_height_mm']:.1f} mm   |   "
-        f"Diffuser {p['diffuser_angle_deg']:.2f}°",
-        fontsize=11.5,
-        fontweight="bold",
-        color="#f8fafc",
-        va="top",
-    )
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=gif_dpi)
-    plt.close(fig)
-    buf.seek(0)
-    frames.append(Image.open(buf).convert("P", palette=Image.Palette.ADAPTIVE))
-    durations.append(950 if idx in (0, len(milestones) - 1) else 480)
+    durations.append(1000 if f_pos in (0, len(frame_indices) - 1) else 460)
 
   frames[0].save(
       out_path,

@@ -1,10 +1,13 @@
 {
-  "model_name": "PERRINN 2017 Open-Source Formula 1 Car",
+  "model_name": "PERRINN 2017 Open-Source Formula 1 Car (Official Onshape CFD-Ready CAD)",
   "public_cad_reference": {
     "designer": "PERRINN Limited (Nicolas Perrin)",
-    "onshape_document_id": "2d5c0c72cf8a49f59d60fb1b",
+    "onshape_document_name": "PERRINN F1 aero | CFD ready",
+    "onshape_document_id": "56d4b1ffe4b0f9d49cca0e99",
+    "onshape_workspace_id": "f487040ce072f6f71178e968",
+    "onshape_element_id": "ebfe374e635ff3310b8d26b9",
     "license": "Open-Source PERRINN F1 Community CAD",
-    "validation_publication": "U. Ravelli & M. Savini, 'Aerodynamic Simulation of a 2017 Formula 1 Car with Open-Source CFD Code (OpenFOAM)', Journal of Traffic and Transportation Engineering 6(2), 155-163, 2018."
+    "validation_publication": "U. Ravelli & M. Savini, 'Aerodynamic Simulation of 2017 Perrinn F1 Car', Journal of Traffic and Transportation Engineering 6(2), 155-163, 2018."
   },
   "chassis_dimensions": {
     "wheelbase_m": 3.475,
@@ -14,8 +17,8 @@
     "rear_axle_x_m": 3.475,
     "front_tire_width_m": 0.305,
     "rear_tire_width_m": 0.405,
-    "tire_outer_diameter_m": 0.670,
-    "tire_radius_m": 0.335,
+    "tire_outer_diameter_m": 0.660,
+    "tire_radius_m": 0.330,
     "front_wing_span_m": 1.800,
     "rear_wing_span_m": 0.950,
     "rear_wing_max_height_m": 0.950
@@ -26,7 +29,7 @@
     "air_density_kg_m3": 1.225,
     "kinematic_viscosity_m2_s": 1.5e-05,
     "dynamic_pressure_pa": 1531.25,
-    "wheel_angular_velocity_rad_s": 149.2537,
+    "wheel_angular_velocity_rad_s": -151.5152,
     "turbulence_model": "SpalartAllmaras",
     "moving_ground": true,
     "symmetry_plane": "y = 0.0 (half-car model, forces multiplied by 2.0 for full car)"
@@ -40,7 +43,7 @@
     "openfoam_120m_cells_sa_SCx_m2": 1.16,
     "openfoam_120m_cells_sa_L_over_D": 2.89,
     "openfoam_120m_cells_sa_front_aero_balance": 0.403,
-    "note": "Batch evaluation uses an ~57,000-cell graded hex-dominant snappyHexMesh (solving in ~45s per candidate on 1 VM) which preserves full-car drag area (~1.15-1.41 m^2) and true 3D ground-effect, outwash, and pitch-balance gradients while diffusing peak thin-gap suction relative to 120M-cell prism meshes."
+    "note": "Batch evaluation uses an ~125,000-cell graded hex-dominant snappyHexMesh directly on the 67-part official PERRINN 2017 Onshape CAD assembly, preserving full-car drag area (~1.18-1.32 m^2 vs. 1.16-1.23 m^2 published) and true 3D ground-effect, outwash, and pitch-balance gradients while diffusing peak thin-gap suction relative to 120M-cell prism meshes."
   },
   "design_bounds": {
     "front_ride_height_mm": [18.0, 50.0],

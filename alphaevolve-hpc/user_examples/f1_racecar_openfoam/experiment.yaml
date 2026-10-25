@@ -16,12 +16,13 @@ title: "OpenFOAM 3D Formula 1 Aerodynamic Evolution (PERRINN 2017 F1 Car)"
 problem_description: |
   Evolve `design_f1_aero_package(design_bounds)` in `main.py` to optimize the
   8-parameter 3D aerodynamic setup of the open-source **PERRINN 2017 Formula 1
-  Car** (Nicolas Perrin / PERRINN Limited, Onshape CAD `2d5c0c72cf8a49f59d60fb1b`;
-  CFD benchmarked against Ravelli & Savini, *JTTE* 2018) evaluated in 3D steady
+  Car** (Nicolas Perrin / PERRINN Limited, official 67-part Onshape CAD
+  `PERRINN F1 aero | CFD ready`, Document `56d4b1ffe4b0f9d49cca0e99`; CFD
+  benchmarked against Ravelli & Savini, *JTTE* 2018) evaluated in 3D steady
   incompressible Spalart-Allmaras RANS (`blockMesh` + `snappyHexMesh` +
   OpenFOAM `incompressibleFluid` / `simpleFoam`) at `U_inf = 50.0 m/s`
   (`180 km/h`, `Re_L = 1.67e7`) with a `50 m/s` moving ground belt and rotating
-  front/rear Pirelli F1 wheels (`omega = 149.25 rad/s`).
+  front/rear Pirelli F1 wheels (`omega = -151.5152 rad/s`).
 
   Aerodynamic Objectives:
   - Maximize full-car vertical downforce area `-SCz` [m^2] and aerodynamic
@@ -43,7 +44,7 @@ problem_description: |
      (`sidepod_undercut_ratio <= 0.479`).
 program_language: "python"
 primary_metric: "f1_aero_lap_score"
-initial_score: -5.7525
+initial_score: -11.0295
 
 seed_files:
   - "main.py"

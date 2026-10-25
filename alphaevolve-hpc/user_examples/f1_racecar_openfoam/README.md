@@ -1,11 +1,11 @@
 # 3D Formula 1 Aerodynamic Evolution with OpenFOAM (PERRINN 2017 F1 Car)
 
-This example uses **AlphaEvolve** and **OpenFOAM** 3D steady incompressible Spalart-Allmaras RANS CFD (`blockMesh` + `snappyHexMesh` + `incompressibleFluid` / `simpleFoam`) to evolve the 8-parameter 3D ground-effect, outwash, and multi-element wing aerodynamic package of the open-source **PERRINN 2017 Formula 1 Car**.
+This example uses **AlphaEvolve** and **OpenFOAM** 3D steady incompressible Spalart-Allmaras RANS CFD (`blockMesh` + `snappyHexMesh` + `incompressibleFluid` / `simpleFoam`) to evolve the 8-parameter 3D ground-effect, outwash, and multi-element wing aerodynamic package of the official open-source **PERRINN 2017 Formula 1 Car**.
 
-## Public Formula 1 Reference Model & Validation Benchmark
+## Official PERRINN 2017 CAD Model & Validation Benchmark
 
-* **CAD & Vehicle Reference**: **PERRINN 2017 Open-Source Formula 1 Car** (Nicolas Perrin / PERRINN Limited, public Onshape CAD `2d5c0c72cf8a49f59d60fb1b`: `3,475 mm` wheelbase, `2,000 mm` overall track width, `1,800 mm` 2017 delta front wing, `1,600 mm` Venturi underfloor & `175 mm` rear diffuser box, `950 mm` dual-element rear wing, and `Ø670 mm` Pirelli `305/670-R13` front & `405/670-R13` rear open wheels).
-* **Published OpenFOAM CFD Benchmark**: Umberto Ravelli & Marco Savini, *"Aerodynamic Simulation of 2017 Perrinn F1 Car"* (*Journal of Traffic and Transportation Engineering*, Vol. 6, No. 2, pp. 155–163, 2018), which established that the PERRINN 2017 underbody + diffuser generates ~58% of total vehicle downforce while open rotating tires act as major parasitic lift and wake-drag sources that must be managed via front-wing endplate outwash and floor vortex strakes.
+* **Official 67-Part Onshape CAD Assembly**: **PERRINN 2017 Open-Source Formula 1 Car** (`PERRINN F1 aero | CFD ready`, Nicolas Perrin / PERRINN Limited, public Onshape Document `56d4b1ffe4b0f9d49cca0e99`, Workspace `f487040ce072f6f71178e968`, Element `ebfe374e635ff3310b8d26b9`), archived directly in `models/perrinn_f1_2017_cad.npz` (`346,145` full-car surface triangles across all 67 parts including monocoque, driver & visor, double-wishbone carbon suspension, brake ducts, bargeboards, V6 sidepods, Venturi floor, rear diffuser & vortex strakes, multi-element 2017 delta front wing, dual-element rear wing, forged multi-spoke rims, and `Ø660 mm` Pirelli tires; `92,629` watertight CFD STL triangles across the 6 OpenFOAM solver regions).
+* **Published OpenFOAM CFD Benchmark**: Umberto Ravelli & Marco Savini, *"Aerodynamic Simulation of 2017 Perrinn F1 Car"* (*Journal of Traffic and Transportation Engineering*, Vol. 6, No. 2, pp. 155–163, 2018), establishing that the PERRINN 2017 underbody + diffuser is the primary downforce generator while exposed rotating tires and upper bodywork create substantial parasitic lift and wake drag that must be controlled via high-rake Venturi pitch, front-wing endplate outwash, and floor vortex strakes.
 
 ---
 
@@ -15,9 +15,9 @@ This example uses **AlphaEvolve** and **OpenFOAM** 3D steady incompressible Spal
 graph TD
     A["AlphaEvolve LLM Sampler (Gemini)"] --> B["Candidate Program (main.py: design_f1_aero_package)"]
     B --> C["FIA 2017 Technical Regulation Legality Check (Art. 3.5.3 Diffuser Box, Plank, Strakes, Cooling)"]
-    C --> D["src/geometry/perrinn_f1_stl.py: 6-Solid Watertight 3D ASCII STL (perrinn_f1.stl)"]
-    D --> E["OpenFOAM-14 blockMesh + snappyHexMesh (~57,100 Hex/Split-Hex Cells, 3 Wake/Floor Boxes)"]
-    E --> F["OpenFOAM 3D Spalart-Allmaras RANS (50 m/s Moving Ground + 149.25 rad/s Rotating Pirelli Tires)"]
+    C --> D["src/geometry/perrinn_f1_stl.py: 67-Part Official PERRINN CAD Morpher (92,629-Tri Watertight perrinn_f1.stl)"]
+    D --> E["OpenFOAM blockMesh + snappyHexMesh (~148,000–151,000 Hex/Split-Hex Cells, 3 Wake/Floor Boxes)"]
+    E --> F["OpenFOAM 3D Spalart-Allmaras RANS (50 m/s Moving Ground + -151.52 rad/s Rotating Pirelli Tires)"]
     F --> G["Boundary-Patch Pressure + Viscous Wall-Shear Integration (-SCz, SCx, L/D, Front Aero Balance)"]
     G --> A
 ```
@@ -28,10 +28,10 @@ graph TD
 
 | Property | Value |
 | :--- | :--- |
-| **OpenFOAM Solver** | OpenFOAM-14 `foamRun -solver incompressibleFluid` / `simpleFoam` (Steady 3D Spalart-Allmaras RANS) |
+| **OpenFOAM Solver** | OpenFOAM `foamRun -solver incompressibleFluid` / `simpleFoam` (Steady 3D Spalart-Allmaras RANS) |
 | **Freestream Conditions** | $U_\infty = 50.0\text{ m/s}$ ($180\text{ km/h}$), $\rho = 1.225\text{ kg/m}^3$, $\nu = 1.5\times 10^{-5}\text{ m}^2/\text{s}$ ($\text{Re}_L \approx 1.67\times 10^7$) |
-| **Moving Ground & Rotating Wheels** | Moving asphalt belt $U_{\text{ground}} = (50, 0, 0)\text{ m/s}$; `rotatingWallVelocity` $\omega = 149.2537\text{ rad/s}$ on `frontWheel` & `rearWheel` |
-| **Wind-Tunnel Half-Car Domain** | $x \in [-4.5, 11.5]\text{ m}$, $y \in [0.0, 4.0]\text{ m}$ (`symmetry` plane at $y=0$), $z \in [0.0, 3.6]\text{ m}$ ($\approx 56{,}300\text{–}57{,}200$ hex cells) |
+| **Moving Ground & Rotating Wheels** | Moving asphalt belt $U_{\text{ground}} = (50, 0, 0)\text{ m/s}$; `rotatingWallVelocity` $\omega_y = -151.5152\text{ rad/s}$ ($R_{\text{tire}} = 0.330\text{ m}$) on `frontWheel` & `rearWheel` |
+| **Wind-Tunnel Half-Car Domain** | $x \in [-4.5, 11.5]\text{ m}$, $y \in [0.0, 4.0]\text{ m}$ (`symmetry` plane at $y=0$), $z \in [0.0, 3.6]\text{ m}$ ($\approx 146{,}000\text{–}151{,}000$ hex cells) |
 | **6 Named STL / Boundary Patches** | `perrinn_f1_underbody`, `perrinn_f1_frontWing`, `perrinn_f1_rearWing`, `perrinn_f1_chassis`, `perrinn_f1_frontWheel`, `perrinn_f1_rearWheel` |
 | **FIA Legality Guardrail 1 (Plank & Rake)** | `front_ride_height_mm >= 20.0 mm` and positive rake `rear_ride_height_mm >= front_ride_height_mm + 5.0 mm` |
 | **FIA Legality Guardrail 2 (Art. 3.5.3 Box)** | Rear diffuser exit roof height $20.0 + 525.0 \tan(\theta_{\text{diff}}) \le 175.0\text{ mm}$ ($\theta_{\text{diff}} \le 16.44^\circ$) |
@@ -42,30 +42,30 @@ graph TD
 
 ---
 
-## Baseline vs. Evolved Champion (3,000 Evolutionary Iterations & 130 Real 3D OpenFOAM RANS Runs)
+## Baseline vs. Evolved Champion (3,000 Evolutionary Iterations & 56 Live 3D OpenFOAM RANS Runs on Official PERRINN CAD)
 
 ![OpenFOAM 3D PERRINN 2017 Formula 1 Aerodynamic Evolution Comparison](f1_aero_comparison.png)
 
 ![OpenFOAM 3D PERRINN 2017 Formula 1 Aerodynamic Evolution 4K Model-Only Animation](f1_aero_evolution.gif)
 
-| Aerodynamic Metric | Iter 0 Seed (`main.py`) | Iter 999 Mid-Campaign (`iter_0999_ep8`) | Iter 2982 Champion (`iter_2982_ep18`) | Evolution Gain (Iter 2982 vs. Seed) |
+| Aerodynamic Metric | Iter 0 Seed (`main.py`) | Iter 1389 Mid-Campaign (`iter_1389_ep4`) | Iter 2868 Champion (`iter_2868_ep8`) | Evolution Gain (Iter 2868 vs. Seed) |
 | :--- | :---: | :---: | :---: | :---: |
-| **`f1_aero_lap_score`** | **`-5.7525`** | `+2.2219` | **`+2.9677`** | **`+8.7202` (`-5.75` $\to$ `+2.97`)** |
-| **Full-Car Downforce Area ($-SC_z$)** | `0.6201 m²` | `1.8503 m²` | **`2.1545 m²`** | **`+247.4%` (`3.47x` baseline)** |
-| **Full-Car Drag Area ($SC_x$)** | `1.1472 m²` | `1.4895 m²` | **`1.5008 m²`** | `+30.8%` for `+247.4%` downforce |
-| **Aerodynamic Efficiency ($L/D = -SC_z / SC_x$)** | `0.5405` | `1.2422` | **`1.4356`** | **`+165.6%` (`2.66x` efficiency)** |
-| **Front Aerodynamic Balance ($\text{FB}$)** | `78.90%` ❌ (Oversteer) | `42.72%` ✅ | **`43.84%` ✅** | **Within `0.66%` of `44.5%` target** |
-| **Underbody & Diffuser Downforce ($-SC_{z,\text{floor}}$)** | `+0.1864 m²` (`30.1%`) | `+1.1355 m²` (`61.4%`) | **`+1.2840 m²` (`59.6%`)** | **`6.89x` ground-effect suction** |
-| **2017 Delta Front Wing ($-SC_{z,\text{FW}}$)** | `+0.7517 m²` | `+0.7852 m²` | **`+0.8555 m²`** | `+13.8%` balanced front axle load |
-| **Dual-Element Rear Wing ($-SC_{z,\text{RW}}$)** | `+0.4971 m²` | `+0.5622 m²` | **`+0.6095 m²`** | `+22.6%` diffuser-coupled extraction |
-| **Monocoque & Sidepod Drag ($SC_{x,\text{chassis}}$)** | `0.1362 m²` | `0.0973 m²` | **`0.0920 m²`** | **`-32.5%` body pressure drag** |
-| **Front/Rear Ride Height ($h_f / h_r$)** | `40.0 / 62.0 mm` | `20.4 / 84.5 mm` | **`20.01 / 94.18 mm`** | **`1.22°` extreme Venturi rake** |
-| **Diffuser Angle / FIA Box Height** | `10.00°` (`112.6 mm`) | `16.38°` (`174.4 mm`) | **`16.44°` (`174.9 / 175.0 mm`)** | **99.96% of FIA Art. 3.5.3 box limit** |
+| **`f1_aero_lap_score`** | **`-11.0295`** | `-0.7725` | **`-0.4078`** | **`+10.6217` (`-11.03` $\to$ `-0.41`)** |
+| **Full-Car Net Downforce Area ($-SC_z$)** | `-0.0724 m²` (Net Lift) | `+0.4926 m²` | **`+0.6480 m²`** | **`+0.7204 m²` net downforce swing** |
+| **Full-Car Drag Area ($SC_x$)** | `1.2407 m²` | `1.3798 m²` | **`1.4064 m²`** | `+13.4%` drag for `+0.72 m²` downforce |
+| **Aerodynamic Efficiency ($L/D = -SC_z / SC_x$)** | `-0.0584` | `+0.3570` | **`+0.4607`** | **`+0.5191` (`-0.06` $\to$ `+0.46`)** |
+| **Front Aerodynamic Balance ($\text{FB}$)** | `0.00%` ❌ (Net Lift) | `45.97%` ✅ | **`43.79%` ✅** | **Within `0.71%` of `44.5%` target** |
+| **Underbody & Diffuser Downforce ($-SC_{z,\text{floor}}$)** | `+0.6400 m²` | `+0.8124 m²` | **`+1.0643 m²`** | **`+66.3%` Venturi floor suction** |
+| **2017 Delta Front Wing ($-SC_{z,\text{FW}}$)** | `+0.3479 m²` | `+0.4705 m²` | **`+0.5146 m²`** | **`+47.9%` front axle downforce** |
+| **Dual-Element Rear Wing ($-SC_{z,\text{RW}}$)** | `+0.2511 m²` | `+0.4485 m²` | **`+0.4916 m²`** | **`+95.8%` diffuser-coupled extraction** |
+| **Monocoque & Sidepod Drag ($SC_{x,\text{chassis}}$)** | `0.4804 m²` | `0.4691 m²` | **`0.4657 m²`** | **`-3.1%` body pressure drag** |
+| **Front/Rear Ride Height ($h_f / h_r$)** | `40.0 / 62.0 mm` | `37.10 / 94.90 mm` | **`32.51 / 94.90 mm`** | **`+62.39 mm` (`1.03°`) high-rake attitude** |
+| **Diffuser Angle / FIA Box Height** | `10.00°` (`112.6 mm`) | `12.66°` (`138.0 mm`) | **`16.435°` (`174.98 / 175.0 mm`)** | **99.99% of FIA Art. 3.5.3 box limit** |
 
-### Key 3D Aerodynamic Discoveries Across 3,000 Iterations (AlphaEvolve + OpenFOAM)
-1. **Extreme High-Rake Venturi + Deep Vortex-Strake Seal (`h_f = 20.01 mm`, `h_r = 94.18 mm`, `diff = 16.44°`, `strake = 83.77 mm`)**: Extending the evolutionary campaign to 3,000 iterations (`130` real 3D OpenFOAM Spalart-Allmaras RANS evaluations, `23` strictly-improving milestones) unlocked the coupled interaction between near-ceiling rear rake (`94.18 mm`, creating a `1.22°` pitch angle), full `16.44°` FIA Art. 3.5.3 diffuser expansion (`174.93 / 175.0 mm` = **99.96% box utilization**), and deep `83.77 mm` longitudinal vortex strakes (`15.63 mm` ground clearance vs. `15.00 mm` minimum). Underbody downforce surges **6.89x** (`0.1864 m²` $\to$ **`1.2840 m²`**), delivering **59.6%** of total vehicle downforce — matching Ravelli & Savini's published PERRINN 2017 benchmark (~58% underbody contribution).
-2. **Maximum Legal Coke-Bottle Sidepod Undercut (`sidepod_undercut = 0.473`, `fw_outwash_toe = 2.02°`)**: Pushing the Coke-bottle sidepod undercut from `0.34` (at Iteration 999) up to `0.473` (`0.0888 m²` radiator duct area vs. `0.0880 m²` V6 hybrid cooling floor = **99.1% utilization**) while trimming front-wing outwash toe to `2.02°` cuts chassis drag by **`-32.5%`**, reduces front-wheel wake drag to `0.1918 m²`, and adds `+0.3042 m²` of downforce over Iteration 999 with virtually zero net drag penalty (`SCx: 1.4895 -> 1.5008 m²`), lifting full-car `L/D` from `1.2422` to **`1.4356`** (`2.66x` baseline).
-3. **Zero-Penalty Pitch-Moment Convergence (`FB: 78.90% -> 43.84%`)**: Pairing the `28.0°` 2017 delta front-wing cascade flap (`-SCz = 0.8555 m²`) with the `38.0°` dual-element rear wing (`-SCz = 0.6095 m²`) and `1.2840 m²` Venturi floor locks Front Aerodynamic Balance at **`43.84%`** — just `0.66%` from the `44.50%` PERRINN neutral stability target.
+### Key 3D Aerodynamic Discoveries on the Official 67-Part PERRINN 2017 CAD
+1. **Overcoming Open-Wheel & Monocoque Parasitic Lift via High-Rake Venturi Expansion (`h_f = 32.51 mm`, `h_r = 94.90 mm`, `diff = 16.435°`, `strake = 57.23 mm`)**: On the authentic 67-part PERRINN 2017 CAD (`~150,092` hex cells), exposed rotating Pirelli tires (`-SCz = -0.4752 m²`, `SCx = 0.6252 m²`) and convex upper chassis/cockpit curvature (`-SCz = -0.9472 m²`) produce substantial parasitic lift, leaving the high-clearance showroom seed (`40 / 62 mm`, `21.5°` RW) in slight net lift (`-SCz = -0.0724 m²`). Across 3,000 evolutionary iterations (`56` live 3D OpenFOAM Spalart-Allmaras RANS runs, 100% convergence), AlphaEvolve discovers a `+62.39 mm` nose-down rake paired with `16.435°` diffuser expansion (`174.98 / 175.0 mm` = **99.99% of the FIA Art. 3.5.3 box ceiling**) and `57.23 mm` vortex strakes, boosting underbody suction by **`+66.3%`** (`+0.6400` $\to$ **`+1.0643 m²`**) at just `0.0357 m²` floor drag (`L/D_floor = 29.8`).
+2. **Front-Wing Endplate Outwash + Coke-Bottle Sidepod Undercut (`fw_outwash_toe = 11.03°`, `sidepod_undercut = 0.333`)**: Deflecting the turbulent front-tire wake outboard with `11.03°` endplate outwash while carving a `0.333` Coke-bottle sidepod undercut (`0.1054 m²` radiator inlet vs. `0.0880 m²` V6 cooling minimum) energizes flow over the rear floor shelf, lowering chassis drag (`0.4804` $\to$ `0.4657 m²`) and front-wheel drag (`0.2643` $\to$ `0.2479 m²`) while elevating front-wing downforce **`+47.9%`** (`+0.3479` $\to$ **`+0.5146 m²`**).
+3. **Zero-Penalty Longitudinal Pitch Balance (`FB = 43.79%`)**: Loading the dual-element rear wing to `37.59°` (`+0.2511` $\to$ **`+0.4916 m²`**, `+95.8%`) against `20.16°` front-wing cascade flap angle locks Front Aerodynamic Balance at **`43.79%`** — just `0.71%` inside the `44.50% ± 2.8%` neutral handling window (`0.0000` balance penalty).
 
 ---
 
@@ -75,23 +75,24 @@ graph TD
 user_examples/f1_racecar_openfoam/
 ├── eval-batch.yaml                 # Cloud Batch job template (taskCount: 1)
 ├── evaluator.Dockerfile            # Ubuntu 24.04 + OpenFOAM-14 + Python 3.12 container
-├── evaluator.py                    # AlphaEvolve evaluation, telemetry & 3D Cp visualization hooks
+├── evaluator.py                    # AlphaEvolve evaluation, telemetry & Z-buffered 3D CAD rendering hooks
 ├── experiment.yaml                 # Declarative experiment configuration
-├── f1_aero_comparison.png          # 4-panel 3D OpenFOAM Cp, Venturi suction & component KPI figure
-├── f1_aero_evolution.gif           # 4K UHD (3840x2160) model-only 3D OpenFOAM F1 evolution GIF
+├── f1_aero_comparison.png          # 4-panel Z-buffered PERRINN CAD Cp, Venturi suction & KPI figure
+├── f1_aero_evolution.gif           # 4K UHD (3840x2160) model-only official PERRINN 2017 CAD evolution GIF
 ├── main.py                         # Seed 8-parameter F1 setup program (# EVOLVE-BLOCK)
 ├── Makefile                        # Local build & test targets
 ├── README.md                       # Documentation
 ├── run_experiment.py               # Cloud Batch / local evolution controller entrypoint
 ├── setup.sh                        # Environment & OpenFOAM verification script
 ├── models/
-│   ├── perrinn_f1_2017_spec.json   # PERRINN 2017 CAD dimensions & FIA 2017 regulation bounds
-│   └── evolution_history.json      # 3,000-iteration telemetry + 130 real 3D OpenFOAM RANS runs
+│   ├── perrinn_f1_2017_cad.npz     # Official 67-part PERRINN 2017 Onshape CAD (346k render / 92.6k CFD tris)
+│   ├── perrinn_f1_2017_spec.json   # PERRINN 2017 CAD metadata & FIA 2017 regulation bounds
+│   └── evolution_history.json      # 3,000-iteration telemetry + 56 live ~149k-cell 3D OpenFOAM RANS runs
 └── src/
     ├── cfd/
-    │   └── openfoam_f1_runner.py   # OpenFOAM-14 / simpleFoam case writer, runner & polyMesh force parser
+    │   └── openfoam_f1_runner.py   # OpenFOAM / simpleFoam case writer, runner & polyMesh force parser
     └── geometry/
-        └── perrinn_f1_stl.py       # Parametric 6-solid watertight 3D PERRINN F1 STL builder
+        └── perrinn_f1_stl.py       # 67-part official PERRINN CAD morpher & 6-solid watertight STL builder
 ```
 
 ## Quickstart & Running on Google Cloud

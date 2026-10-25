@@ -11,29 +11,34 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Watertight 6-region 3D STL generator & FIA 2017 legality checker for PERRINN F1.
+"""6-region 3D CAD mesh morpher, STL generator & FIA 2017 legality checker for PERRINN F1.
 
-Synthesizes a closed, 2-manifold multi-solid ASCII STL representing the half-car
-(y >= 0, extending cleanly to y = -0.05 m across the y = 0 symmetry plane for
-snappyHexMesh intersection) of the 2017 PERRINN Open-Source Formula 1 Car:
-  1. `chassis`: Low 2017 FIA nose cone, survival cell, halo fairing, undercut
-     sidepods, airbox, and Coanda coke-bottle engine cover.
-  2. `underbody`: Front T-tray splitter, concave ground-effect Venturi tunnel,
-     outer vortex-sealing floor skirt, FIA Art. 3.5 rear diffuser, Gurney lip,
-     and twin longitudinal vortex strakes.
-  3. `frontWing`: 2017 FIA delta-swept mainplane (with Y250 neutral central
-     section), slotted upper cascade flap, and outwash-angled endplate.
-  4. `rearWing`: 2017 FIA swept dual-element inverted rear wing with Gurney
-     tabs, central Y150 diffuser-extraction monkey-seat, and full-depth endplate.
-  5. `frontWheel`: 2017 FIA 305 mm x 670 mm Pirelli front tire with contact plinth.
-  6. `rearWheel`: 2017 FIA 405 mm x 670 mm Pirelli rear tire with contact plinth.
+Operates directly on the 67-part official PERRINN 2017 Formula 1 Onshape CAD
+assembly (`PERRINN F1 aero | CFD ready`, Document `56d4b1ffe4b0f9d49cca0e99`,
+Workspace `f487040ce072f6f71178e968`, Element `ebfe374e635ff3310b8d26b9`,
+packaged in `models/perrinn_f1_2017_cad.npz`) across all 6 OpenFOAM regions:
+  1. `chassis`: Monocoque survival cell, nose, open cockpit + headrest + driver
+     helmet & visor, sculpted sidepods & radiator ducts, shark-fin engine cover,
+     bargeboards, turning vanes, triple sidepod vortex vanes, mirrors, cameras,
+     and front/rear double-wishbone + pushrod suspension linkages.
+  2. `underbody`: FIA reference-plane plank, step-plane floor, FIA Art. 3.5.3
+     rear diffuser tunnels, and 6 longitudinal vortex-sealing strakes.
+  3. `frontWing`: 2017 FIA delta-swept multi-element mainplane, slotted upper
+     cascade flaps, Y250 neutral central section, and outwash endplates.
+  4. `rearWing`: 2017 FIA swept dual-element mainplane, DRS upper flap, and
+     louvered endplates.
+  5. `frontWheel`: Pirelli 305/660-R13 front tire, contact patch, multi-spoke
+     13-inch rim, wheel nut, brake barrel, axle, and upright.
+  6. `rearWheel`: Pirelli 405/660-R13 rear tire, contact patch, multi-spoke
+     13-inch rim, wheel nut, brake barrel, axle, and upright.
 """
 
 from __future__ import annotations
 
+import io
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Tuple
 
 import numpy as np
 
@@ -56,6 +61,25 @@ EXPECTED_SOLIDS: Tuple[str, ...] = (
     "frontWheel",
     "rearWheel",
 )
+
+THIS_DIR = Path(__file__).absolute().parent
+EXPERIMENT_DIR = THIS_DIR.parents[1]
+CAD_NPZ_PATH = EXPERIMENT_DIR / "models" / "perrinn_f1_2017_cad.npz"
+
+_CAD_CACHE: Dict[str, np.ndarray] | None = None
+
+
+def _load_cad_archive() -> Dict[str, np.ndarray]:
+  """Loads and caches the official PERRINN 2017 Onshape CAD mesh archive."""
+  global _CAD_CACHE
+  if _CAD_CACHE is None:
+    if not CAD_NPZ_PATH.is_file():
+      raise FileNotFoundError(
+          f"Missing official PERRINN 2017 CAD archive: {CAD_NPZ_PATH}"
+      )
+    with np.load(CAD_NPZ_PATH, allow_pickle=False) as data:
+      _CAD_CACHE = {k: data[k] for k in data.files}
+  return _CAD_CACHE
 
 
 def compute_fia_legality_metrics(
@@ -166,422 +190,213 @@ def compute_fia_legality_metrics(
   }
 
 
-def _closed_loft_triangles(
-    stations: Sequence[np.ndarray],
-) -> List[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
-  """Builds a closed, outward-oriented triangle mesh across cross-sections."""
-  tris: List[Tuple[np.ndarray, np.ndarray, np.ndarray]] = []
-  m = len(stations)
-  k_pts = stations[0].shape[0]
-  for i in range(m - 1):
-    a = stations[i]
-    b = stations[i + 1]
-    for k in range(k_pts):
-      kn = (k + 1) % k_pts
-      tris.append((a[k], a[kn], b[kn]))
-      tris.append((a[k], b[kn], b[k]))
-
-  c0 = np.mean(stations[0], axis=0)
-  for k in range(k_pts):
-    kn = (k + 1) % k_pts
-    tris.append((c0, stations[0][kn], stations[0][k]))
-
-  c1 = np.mean(stations[-1], axis=0)
-  for k in range(k_pts):
-    kn = (k + 1) % k_pts
-    tris.append((c1, stations[-1][k], stations[-1][kn]))
-
-  vol6 = sum(float(np.dot(np.cross(v0, v1), v2)) for v0, v1, v2 in tris)
-  if vol6 < 0.0:
-    tris = [(v0, v2, v1) for v0, v1, v2 in tris]
-  return tris
-
-
-def _airfoil_xz(
-    chord: float,
-    camber: float,
-    thickness: float,
-    aoa_deg: float,
-    x_le: float,
-    z_le: float,
-    invert: bool = True,
-    gurney_frac: float = 0.0,
-    k_pts: int = 28,
+def _morph_part_vertices(
+    part_idx: int,
+    v0: np.ndarray,
+    params: Mapping[str, float],
+    for_cfd: bool = True,
 ) -> np.ndarray:
-  """Generates a closed cambered NACA-4 airfoil section with optional Gurney lip."""
-  half = k_pts // 2
-  bu = np.linspace(0.0, math.pi, half + 1)[:-1]
-  bl = np.linspace(math.pi, 0.0, half + 1)[:-1]
-  pts = []
-  rad = math.radians(aoa_deg)
-  ca, sa = math.cos(rad), math.sin(rad)
-  for is_up, betas in [(True, bu), (False, bl)]:
-    for b in betas:
-      xc = 0.5 * (1.0 - math.cos(b))
-      yt = 5.0 * thickness * (
-          0.2969 * math.sqrt(max(xc, 1e-6))
-          - 0.1260 * xc
-          - 0.3516 * xc**2
-          + 0.2843 * xc**3
-          - 0.1036 * xc**4
+  """Applies 8-DOF aerodynamic & suspension kinematic morphing to a CAD part."""
+  h_f = float(params["front_ride_height_mm"]) * 1e-3
+  h_r = float(params["rear_ride_height_mm"]) * 1e-3
+  diff_deg = float(params["diffuser_angle_deg"])
+  strk_h = float(params["diffuser_strake_height_mm"]) * 1e-3
+  fw_flap = float(params["fw_flap_angle_deg"])
+  fw_toe = float(params["fw_outwash_toe_deg"])
+  rw_aoa = float(params["rw_aoa_deg"])
+  uc = float(params["sidepod_undercut_ratio"])
+  uc_delta = uc - 0.18
+
+  theta = math.atan2(h_r - h_f, 3.475)
+  ct, st_ang = math.cos(theta), math.sin(theta)
+
+  def _sprung_xfm(v_in: np.ndarray) -> np.ndarray:
+    dx = v_in[:, 0]
+    dz = v_in[:, 2] + 0.010
+    out = v_in.copy()
+    out[:, 0] = dx * ct - dz * st_ang
+    out[:, 2] = h_f + dx * st_ang + dz * ct
+    return out
+
+  dv = v0.astype(np.float32, copy=True)
+
+  # 1. Local aerodynamic surface deformations in CAD reference coordinates
+  if part_idx == 72:
+    # 2017 delta front-wing cascade flap deflection + endplate outwash toe
+    # Native PERRINN CAD is at race cascade trim (~26.0 deg)
+    d_flap = math.radians(fw_flap - 26.0) * 0.70
+    m_fl = (
+        (np.abs(dv[:, 1]) > 0.24)
+        & (np.abs(dv[:, 1]) < 0.83)
+        & (dv[:, 0] > -0.95)
+    )
+    if np.any(m_fl):
+      w_fl = np.clip((dv[m_fl, 0] - (-0.95)) / 0.42, 0.0, 1.0)
+      ang_f = d_flap * w_fl
+      dx = dv[m_fl, 0] - (-0.95)
+      dz = dv[m_fl, 2] - 0.105
+      dv[m_fl, 0] = -0.95 + dx * np.cos(ang_f) - dz * np.sin(ang_f)
+      dv[m_fl, 2] = 0.105 + dx * np.sin(ang_f) + dz * np.cos(ang_f)
+
+    d_toe = math.radians(fw_toe - 2.5)
+    m_ep = np.abs(dv[:, 1]) > 0.74
+    if np.any(m_ep):
+      sgn_y = np.sign(dv[m_ep, 1])
+      w_ep = np.clip((np.abs(dv[m_ep, 1]) - 0.74) / 0.12, 0.0, 1.0)
+      dv[m_ep, 1] += sgn_y * (dv[m_ep, 0] - (-0.78)) * np.sin(d_toe * w_ep)
+
+  elif part_idx == 77:
+    # FIA Art. 3.5.3 rear diffuser roof expansion ramp (x = 3.275 .. 3.825 m)
+    target_exit_z = 0.020 + 0.525 * math.tan(math.radians(diff_deg))
+    scale_z = target_exit_z / 0.1750
+    u_x = np.clip((dv[:, 0] - 3.275) / (3.825 - 3.275), 0.0, 1.0)
+    dv[:, 2] *= 1.0 + u_x * (scale_z - 1.0)
+
+  elif part_idx in (8, 75, 69):
+    # Diffuser longitudinal vortex strakes (vertical depth scaling)
+    z_top = float(dv[:, 2].max())
+    dv[:, 2] = z_top - (z_top - dv[:, 2]) * np.clip(strk_h / 0.050, 0.35, 1.65)
+
+  elif part_idx in (109, 98):
+    # Dual-element 2017 rear wing mainplane (#109) + upper DRS flap (#98)
+    # Native PERRINN CAD is at high-downforce race trim (~36.5 deg)
+    if for_cfd and part_idx == 98:
+      dv[:, 2] += 0.016
+    d_rw = math.radians(rw_aoa - 36.5) * (0.85 if part_idx == 98 else 0.45)
+    piv_x, piv_z = (3.850, 0.700) if part_idx == 98 else (3.640, 0.625)
+    dx = dv[:, 0] - piv_x
+    dz = dv[:, 2] - piv_z
+    ca, sa = math.cos(d_rw), math.sin(d_rw)
+    dv[:, 0] = piv_x + dx * ca - dz * sa
+    dv[:, 2] = piv_z + dx * sa + dz * ca
+
+  elif part_idx in (10, 46, 37, -1):
+    # Seal internal sidepod core shelf cleanly inside #15 floor step thickness (z=0.055m)
+    if part_idx == -1:
+      m_shelf = (
+          (dv[:, 0] > 1.25)
+          & (dv[:, 0] < 3.25)
+          & (np.abs(dv[:, 1]) > 0.125)
+          & (dv[:, 2] < 0.110)
       )
-      p = 0.45
-      if xc < p:
-        yc = (camber / p**2) * (2.0 * p * xc - xc**2)
-      else:
-        yc = (camber / (1.0 - p) ** 2) * ((1.0 - 2.0 * p) + 2.0 * p * xc - xc**2)
-      if invert:
-        yc = -yc
-      gurney = 0.0
-      if invert and is_up and gurney_frac > 0.0 and xc > 0.86:
-        gurney = gurney_frac * ((xc - 0.86) / 0.14) ** 1.5
-      zl = (yc + (yt if is_up else -yt) + gurney) * chord
-      xl = xc * chord
-      if invert:
-        xr = xl * ca - zl * sa
-        zr = xl * sa + zl * ca
-      else:
-        xr = xl * ca + zl * sa
-        zr = -xl * sa + zl * ca
-      pts.append((x_le + xr, z_le + zr))
-  return np.array(pts, dtype=float)
+      dv[m_shelf, 2] = 0.055
+    # Sidepod belly undercut & Coke-bottle contraction (zero shift at z<=0.102m floor seam)
+    y_min_uc = 0.20 if part_idx == -1 else 0.24
+    m_uc = (
+        (dv[:, 0] > 1.25)
+        & (dv[:, 0] < 3.25)
+        & (np.abs(dv[:, 1]) > y_min_uc)
+        & (dv[:, 2] > 0.102)
+        & (dv[:, 2] < 0.440)
+    )
+    if np.any(m_uc):
+      ux = np.sin(math.pi * np.clip((dv[m_uc, 0] - 1.25) / 2.00, 0.0, 1.0))
+      uz = np.sin(math.pi * np.clip((dv[m_uc, 2] - 0.102) / 0.338, 0.0, 1.0))
+      dv[m_uc, 1] *= 1.0 - 0.34 * uc_delta * ux * uz
 
+  # 2. Sprung vs. unsprung wheel & kinematic suspension linkage transforms
+  if part_idx in (22, 96, 116, 43, 76, 91, 0, 29, 52, 58, 80, -2):
+    dv[:, 2] += 0.0311
+    if part_idx == 96:
+      if for_cfd:
+        dv[dv[:, 2] < 0.008, 2] = -0.018
+      else:
+        dv[:, 2] = np.maximum(dv[:, 2], 0.0)
+  elif part_idx in (4, 90, 33, 18, 94, 2, 40, 7, 9, 53, 113):
+    dv[:, 2] += 0.0600
+    if part_idx == 90:
+      if for_cfd:
+        dv[dv[:, 2] < 0.008, 2] = -0.018
+      else:
+        dv[:, 2] = np.maximum(dv[:, 2], 0.0)
+  elif part_idx in (107, 57, 5, 59):
+    sv = _sprung_xfm(dv)
+    uv = dv.copy()
+    uv[:, 2] += 0.0311
+    w = np.clip((np.abs(dv[:, 1]) - 0.18) / (0.64 - 0.18), 0.0, 1.0)[:, None]
+    dv = (1.0 - w) * sv + w * uv
+  elif part_idx in (1, 23, 73, 34, 71):
+    sv = _sprung_xfm(dv)
+    uv = dv.copy()
+    uv[:, 2] += 0.0600
+    w = np.clip((np.abs(dv[:, 1]) - 0.06) / (0.54 - 0.06), 0.0, 1.0)[:, None]
+    dv = (1.0 - w) * sv + w * uv
+  else:
+    dv = _sprung_xfm(dv)
+    if not for_cfd and part_idx in (44, 15, 77, 8, 75, 69):
+      dv[:, 2] = np.maximum(dv[:, 2], 0.001)
 
-def _emit_solid(
-    solid_name: str,
-    tri_groups: Sequence[Sequence[Tuple[np.ndarray, np.ndarray, np.ndarray]]],
-) -> str:
-  """Serializes closed triangle groups into a named ASCII STL solid block."""
-  lines = [f"solid {solid_name}"]
-  for tris in tri_groups:
-    for v0, v1, v2 in tris:
-      n = np.cross(v1 - v0, v2 - v0)
-      ln = float(np.linalg.norm(n))
-      if ln < 1e-14:
-        continue
-      n = n / ln
-      lines.append(f"  facet normal {n[0]:.6e} {n[1]:.6e} {n[2]:.6e}")
-      lines.append("    outer loop")
-      lines.append(f"      vertex {v0[0]:.6e} {v0[1]:.6e} {v0[2]:.6e}")
-      lines.append(f"      vertex {v1[0]:.6e} {v1[1]:.6e} {v1[2]:.6e}")
-      lines.append(f"      vertex {v2[0]:.6e} {v2[1]:.6e} {v2[2]:.6e}")
-      lines.append("    endloop")
-      lines.append("  endfacet")
-  lines.append(f"endsolid {solid_name}")
-  return "\n".join(lines)
+  return dv
 
 
 def build_perrinn_f1_stl(
     params: Dict[str, float],
     stl_path: Path,
 ) -> Dict[str, Any]:
-  """Builds the 6-region watertight 3D PERRINN 2017 F1 STL and returns stats."""
-  h_f = float(params["front_ride_height_mm"]) * 1e-3
-  h_r = float(params["rear_ride_height_mm"]) * 1e-3
-  diff_deg = float(params["diffuser_angle_deg"])
-  strake_h = float(params["diffuser_strake_height_mm"]) * 1e-3
-  fw_flap_deg = float(params["fw_flap_angle_deg"])
-  fw_toe_deg = float(params["fw_outwash_toe_deg"])
-  rw_aoa_deg = float(params["rw_aoa_deg"])
-  undercut = float(params["sidepod_undercut_ratio"])
+  """Builds the 6-region 3D PERRINN 2017 F1 CAD ASCII STL and returns stats."""
+  cad = _load_cad_archive()
+  part_ids = cad["part_ids"]
+  solid_ids = cad["solid_ids"]
+  cv_all = cad["cv"]
+  ct_all = cad["ct"]
+  c_v_off = cad["c_v_off"]
+  c_t_off = cad["c_t_off"]
 
-  wb = 3.475
+  solids_tris: Dict[str, List[np.ndarray]] = {s: [] for s in EXPECTED_SOLIDS}
 
-  def z_rake(x: float) -> float:
-    t = float(np.clip(x / wb, -0.25, 1.15))
-    return h_f + (h_r - h_f) * t
+  # Internal watertight cores for #10 1.5mm carbon shell + T-tray keel & front barrel
+  keel_v = _morph_part_vertices(-1, cad["keel_core_v"], params, for_cfd=True)
+  solids_tris["chassis"].append(keel_v[cad["keel_core_t"]])
 
-  solids_txt: List[str] = []
-  solid_counts: Dict[str, int] = {}
-  k_ch = 28
-  angles = np.linspace(0.0, 2.0 * math.pi, k_ch, endpoint=False)
+  fbar_v = _morph_part_vertices(-2, cad["fbarrel_core_v"], params, for_cfd=True)
+  solids_tris["frontWheel"].append(fbar_v[cad["fbarrel_core_t"]])
 
-  # 1. CHASSIS
-  x_ch = [-0.90, -0.55, -0.15, 0.28, 0.55, 0.95, 1.35, 1.80, 2.35, 2.95, 3.42, 3.78]
-  ch_prof = [
-      (0.065, 0.075, 0.130, 0.0),
-      (0.125, 0.105, 0.245, 0.0),
-      (0.210, 0.125, 0.395, 0.0),
-      (0.255, 0.040, 0.495, 0.0),
-      (0.290, 0.022, 0.535, 0.1),
-      (0.330, 0.022, 0.560, 0.3),
-      (0.660, 0.022, 0.610, 1.0),
-      (0.630, 0.022, 0.820, 1.0),
-      (0.480, 0.022, 0.720, 0.95),
-      (0.260, 0.022, 0.610, 0.75),
-      (0.135, 0.095, 0.530, 0.20),
-      (0.080, 0.165, 0.460, 0.0),
-  ]
-  ch_stations = []
-  for x, (ym, zb_rel, zt, uw) in zip(x_ch, ch_prof):
-    zf = z_rake(x)
-    zb = zf + zb_rel
-    zc = 0.5 * (zb + zt)
-    hz = 0.5 * (zt - zb)
-    pts = []
-    for th in angles:
-      ct, st = math.cos(th), math.sin(th)
-      y_norm = 0.5 * (1.0 + ct)
-      ym_eff = ym
-      if uw > 0.0 and st < 0.0:
-        ym_eff = ym * (1.0 - 0.60 * uw * undercut * (-st))
-      y = -0.05 + (ym_eff + 0.05) * (y_norm**0.88)
-      z_shape = math.copysign(abs(st) ** (0.60 if st < 0 else 0.88), st)
-      z = zc + hz * z_shape
-      pts.append((x, y, z))
-    ch_stations.append(np.array(pts, dtype=float))
-  ch_tris = [_closed_loft_triangles(ch_stations)]
-  solid_counts["chassis"] = sum(len(g) for g in ch_tris)
-  solids_txt.append(_emit_solid("chassis", ch_tris))
-
-  # 2. UNDERBODY
-  x_ub = [0.22, 0.42, 0.72, 1.25, 1.95, 2.55, 2.95, 3.30, 3.60, 3.825]
-  ub_stations = []
-  diff_rad = math.radians(diff_deg)
-  for x in x_ub:
-    zf = z_rake(x)
-    bellmouth = (
-        0.018 * max(0.0, (0.55 - x) / 0.33) ** 1.5 if x < 0.55 else 0.0
+  for i, pid in enumerate(part_ids):
+    t0, t1 = int(c_t_off[i]), int(c_t_off[i + 1])
+    if t1 <= t0:
+      continue
+    v0, v1 = int(c_v_off[i]), int(c_v_off[i + 1])
+    verts = _morph_part_vertices(
+        int(pid), cv_all[v0:v1], params, for_cfd=True
     )
-    if x <= 2.55:
-      diff_rise = 0.0
-      ym = 0.42 if x < 0.50 else (0.64 if x < 0.80 else 0.70)
-      thick = 0.054
-    elif x <= 3.30:
-      frac_pre = (x - 2.55) / 0.75
-      diff_rise = (
-          0.040
-          * (frac_pre**1.5)
-          * (math.tan(diff_rad) / math.tan(math.radians(13.0)))
-      )
-      ym = 0.70
-      thick = 0.052
-    else:
-      pre_end = 0.040 * (math.tan(diff_rad) / math.tan(math.radians(13.0)))
-      dx_d = x - 3.30
-      diff_rise = pre_end + dx_d * math.tan(diff_rad)
-      ym = 0.70 - 0.16 * min(1.0, dx_d / 0.22)
-      thick = 0.036
+    tris_idx = ct_all[t0:t1]
+    sname = EXPECTED_SOLIDS[int(solid_ids[i])]
+    solids_tris[sname].append(verts[tris_idx])
 
-    gurney_deck = 0.028 * ((x - 3.50) / 0.325) ** 1.6 if x > 3.50 else 0.0
-    pts = []
-    for th in angles:
-      ct, st = math.cos(th), math.sin(th)
-      y_norm = 0.5 * (1.0 + ct)
-      y = -0.05 + (ym + 0.05) * y_norm
-      ye = max(0.0, y)
-      tunnel_arch = 0.0
-      if 0.07 < ye < ym - 0.04 and x > 0.48:
-        eta = (ye - 0.07) / max(0.10, (ym - 0.11))
-        tunnel_arch = (0.024 + 0.022 * undercut) * math.sin(math.pi * eta) ** 1.15
-        if x > 2.55:
-          tunnel_arch += 0.50 * diff_rise * math.sin(math.pi * eta) ** 0.8
-      edge_skirt = -0.013 * (y_norm**5) if x >= 0.72 else 0.0
-
-      z_bot_local = (
-          zf
-          + bellmouth
-          + diff_rise
-          * (0.68 + 0.32 * math.sin(0.5 * math.pi * min(1.0, ye / 0.45)))
-          + tunnel_arch
-          + edge_skirt
-      )
-      z_top_local = max(
-          z_bot_local + 0.024, zf + thick + 0.35 * diff_rise + gurney_deck
-      )
-      if st >= 0.0:
-        z = 0.5 * (z_bot_local + z_top_local) + 0.5 * (
-            z_top_local - z_bot_local
-        ) * (st**0.55)
-      else:
-        z = 0.5 * (z_bot_local + z_top_local) - 0.5 * (
-            z_top_local - z_bot_local
-        ) * ((-st) ** 0.45)
-      pts.append((x, y, z))
-    ub_stations.append(np.array(pts, dtype=float))
-  ub_tris = [_closed_loft_triangles(ub_stations)]
-
-  for y_st in [0.20, 0.38]:
-    st_stations = []
-    for x in [2.70, 3.25, 3.55, 3.81]:
-      zf = z_rake(x)
-      dx_d = max(0.0, x - 3.30)
-      z_roof = zf + 0.03 + dx_d * math.tan(diff_rad)
-      z_bot = max(0.014, z_roof - strake_h - 0.020)
-      zc = 0.5 * (z_bot + z_roof)
-      hz = 0.5 * (z_roof - z_bot)
-      pts = [
-          (x, y_st + 0.012 * math.cos(th), zc + hz * math.sin(th))
-          for th in angles
-      ]
-      st_stations.append(np.array(pts, dtype=float))
-    ub_tris.append(_closed_loft_triangles(st_stations))
-  solid_counts["underbody"] = sum(len(g) for g in ub_tris)
-  solids_txt.append(_emit_solid("underbody", ub_tris))
-
-  # 3. FRONT WING
-  fw_tris = []
-  ys_fw = np.linspace(-0.05, 0.90, 12)
-  main_st, flap_st = [], []
-  for y in ys_fw:
-    ye = max(0.0, float(y))
-    s_frac = ye / 0.90
-    sweep_x = 0.16 * (s_frac**1.15)
-    y250_blend = float(np.clip((ye - 0.18) / 0.10, 0.0, 1.0))
-    mp_xz = _airfoil_xz(
-        chord=0.27,
-        camber=0.035 + 0.065 * y250_blend,
-        thickness=0.13,
-        aoa_deg=(
-            4.0
-            + (4.0 + 0.25 * fw_flap_deg) * y250_blend
-            - 0.25 * fw_toe_deg * (s_frac**2)
-        ),
-        x_le=-0.95 + sweep_x,
-        z_le=h_f + 0.026 + 0.018 * s_frac,
-        invert=True,
-        gurney_frac=0.03 * y250_blend,
-        k_pts=28,
-    )
-    main_st.append(np.column_stack([mp_xz[:, 0], np.full(28, y), mp_xz[:, 1]]))
-
-    fl_xz = _airfoil_xz(
-        chord=0.22,
-        camber=0.045 + 0.095 * y250_blend,
-        thickness=0.13,
-        aoa_deg=(
-            5.0
-            + (fw_flap_deg - 4.0) * y250_blend
-            - 0.35 * fw_toe_deg * (s_frac**1.5)
-        ),
-        x_le=-0.68 + sweep_x,
-        z_le=h_f + 0.076 + 0.028 * s_frac,
-        invert=True,
-        gurney_frac=0.045 * y250_blend,
-        k_pts=28,
-    )
-    flap_st.append(np.column_stack([fl_xz[:, 0], np.full(28, y), fl_xz[:, 1]]))
-  fw_tris.append(_closed_loft_triangles(main_st))
-  fw_tris.append(_closed_loft_triangles(flap_st))
-
-  toe_rad = math.radians(fw_toe_deg)
-  ep_stations = []
-  for z_ep in np.linspace(h_f + 0.016, h_f + 0.25, 6):
-    pts = []
-    for th in angles:
-      xl = 0.25 * math.cos(th)
-      yl = 0.016 * math.sin(th)
-      xr = -0.54 + xl * math.cos(toe_rad) - yl * math.sin(toe_rad)
-      yr = 0.895 + xl * math.sin(toe_rad) + yl * math.cos(toe_rad)
-      pts.append((xr, yr, float(z_ep)))
-    ep_stations.append(np.array(pts, dtype=float))
-  fw_tris.append(_closed_loft_triangles(ep_stations))
-  solid_counts["frontWing"] = sum(len(g) for g in fw_tris)
-  solids_txt.append(_emit_solid("frontWing", fw_tris))
-
-  # 4. REAR WING
-  rw_tris = []
-  ys_rw = np.linspace(-0.05, 0.475, 9)
-  rw_main_st, rw_flap_st = [], []
-  mp_aoa = 0.54 * rw_aoa_deg
-  mp_te_z = 0.71 + 0.34 * math.sin(math.radians(mp_aoa))
-  mp_te_x = 3.55 + 0.34 * math.cos(math.radians(mp_aoa))
-  for y in ys_rw:
-    ye = max(0.0, float(y))
-    sf = ye / 0.475
-    rw_mp = _airfoil_xz(
-        chord=0.34,
-        camber=0.115,
-        thickness=0.13,
-        aoa_deg=mp_aoa,
-        x_le=3.55 + 0.03 * sf,
-        z_le=0.71,
-        invert=True,
-        gurney_frac=0.025,
-        k_pts=28,
-    )
-    rw_main_st.append(
-        np.column_stack([rw_mp[:, 0], np.full(28, y), rw_mp[:, 1]])
-    )
-
-    rw_fl = _airfoil_xz(
-        chord=0.21,
-        camber=0.135,
-        thickness=0.13,
-        aoa_deg=rw_aoa_deg,
-        x_le=mp_te_x - 0.015 + 0.03 * sf,
-        z_le=mp_te_z + 0.046,
-        invert=True,
-        gurney_frac=0.05,
-        k_pts=28,
-    )
-    rw_flap_st.append(
-        np.column_stack([rw_fl[:, 0], np.full(28, y), rw_fl[:, 1]])
-    )
-  rw_tris.append(_closed_loft_triangles(rw_main_st))
-  rw_tris.append(_closed_loft_triangles(rw_flap_st))
-
-  ms_st = []
-  for y in np.linspace(-0.05, 0.16, 5):
-    ms_xz = _airfoil_xz(
-        chord=0.18,
-        camber=0.11,
-        thickness=0.14,
-        aoa_deg=0.68 * rw_aoa_deg,
-        x_le=3.68,
-        z_le=0.47,
-        invert=True,
-        gurney_frac=0.03,
-        k_pts=28,
-    )
-    ms_st.append(np.column_stack([ms_xz[:, 0], np.full(28, y), ms_xz[:, 1]]))
-  rw_tris.append(_closed_loft_triangles(ms_st))
-
-  rw_ep_st = []
-  for z_ep in np.linspace(0.35, 0.95, 7):
-    sweep_back = 0.07 * ((float(z_ep) - 0.35) / 0.60)
-    pts = [
-        (
-            3.78 + sweep_back + 0.27 * math.cos(th),
-            0.475 + 0.016 * math.sin(th),
-            float(z_ep),
-        )
-        for th in angles
-    ]
-    rw_ep_st.append(np.array(pts, dtype=float))
-  rw_tris.append(_closed_loft_triangles(rw_ep_st))
-  solid_counts["rearWing"] = sum(len(g) for g in rw_tris)
-  solids_txt.append(_emit_solid("rearWing", rw_tris))
-
-  # 5 & 6. FRONT & REAR WHEELS
-  for solid_name, x_axle, y_in, y_out in [
-      ("frontWheel", 0.000, 0.695, 1.000),
-      ("rearWheel", 3.475, 0.595, 1.000),
-  ]:
-    r_tire = 0.335
-    z_hub = 0.335
-    ys_w = np.linspace(y_in, y_out, 7)
-    w_stations = []
-    k_w = 32
-    w_ang = np.linspace(0.0, 2.0 * math.pi, k_w, endpoint=False)
-    for y in ys_w:
-      edge_dist = min(float(y) - y_in, y_out - float(y))
-      bevel = 0.94 if edge_dist < 1e-4 else (0.985 if edge_dist < 0.06 else 1.0)
-      r_loc = r_tire * bevel
-      pts = []
-      for th in w_ang:
-        x_p = x_axle + r_loc * math.cos(th)
-        z_p = z_hub + r_loc * math.sin(th)
-        if z_p < 0.022:
-          z_p = -0.020
-        pts.append((x_p, float(y), z_p))
-      w_stations.append(np.array(pts, dtype=float))
-    w_tris = [_closed_loft_triangles(w_stations)]
-    solid_counts[solid_name] = sum(len(g) for g in w_tris)
-    solids_txt.append(_emit_solid(solid_name, w_tris))
-
+  stl_path = Path(stl_path)
   stl_path.parent.mkdir(parents=True, exist_ok=True)
-  stl_path.write_text("\n".join(solids_txt) + "\n", encoding="utf-8")
+
+  solid_counts: Dict[str, int] = {}
+  fmt = (
+      "  facet normal %.5e %.5e %.5e\n"
+      "    outer loop\n"
+      "      vertex %.5e %.5e %.5e\n"
+      "      vertex %.5e %.5e %.5e\n"
+      "      vertex %.5e %.5e %.5e\n"
+      "    endloop\n  endfacet"
+  )
+
+  with stl_path.open("wb") as f_out:
+    for sname in EXPECTED_SOLIDS:
+      f_out.write(f"solid {sname}\n".encode("ascii"))
+      groups = solids_tris[sname]
+      if groups:
+        tris = np.vstack(groups)
+        tv0, tv1, tv2 = tris[:, 0], tris[:, 1], tris[:, 2]
+        n = np.cross(tv1 - tv0, tv2 - tv0)
+        ln = np.linalg.norm(n, axis=1)
+        ok = ln > 1e-12
+        t_ok = tris[ok]
+        n_ok = n[ok] / ln[ok, None]
+        solid_counts[sname] = int(len(t_ok))
+        buf = np.column_stack([n_ok, t_ok.reshape(-1, 9)])
+        sio = io.BytesIO()
+        np.savetxt(sio, buf, fmt=fmt)
+        f_out.write(sio.getvalue())
+      else:
+        solid_counts[sname] = 0
+      f_out.write(f"endsolid {sname}\n".encode("ascii"))
+
   return {
       "stl_path": str(stl_path),
       "solid_triangle_counts": solid_counts,
@@ -589,70 +404,203 @@ def build_perrinn_f1_stl(
   }
 
 
+def build_perrinn_f1_render_mesh(
+    params: Mapping[str, float],
+    include_left_half: bool = True,
+    decimate_stride: int = 1,
+) -> List[Dict[str, Any]]:
+  """Returns morphed full-car PERRINN 2017 CAD part meshes for 3D rendering.
+
+  Each returned item has keys:
+    - `part_id`: int Onshape CAD occurrence index
+    - `solid`: str OpenFOAM patch name in `EXPECTED_SOLIDS`
+    - `mat_id`: int material class (0=aero_cp, 1=tire, 2=pirelli_marking,
+      3=rim_metal, 4=suspension_carbon, 5=visor_lens)
+    - `verts`: float32 array `[V, 3]`
+    - `tris`: uint32 array `[T, 3]` (outward right-hand winding)
+  """
+  cad = _load_cad_archive()
+  part_ids = cad["part_ids"]
+  solid_ids = cad["solid_ids"]
+  is_center = cad["is_centerline"]
+  mat_ids = cad["mat_ids"]
+  rv_all = cad["rv"]
+  rt_all = cad["rt"]
+  r_v_off = cad["r_v_off"]
+  r_t_off = cad["r_t_off"]
+
+  meshes: List[Dict[str, Any]] = []
+  for i, pid in enumerate(part_ids):
+    t0, t1 = int(r_t_off[i]), int(r_t_off[i + 1])
+    if t1 <= t0:
+      continue
+    v0, v1 = int(r_v_off[i]), int(r_v_off[i + 1])
+    verts = _morph_part_vertices(
+        int(pid), rv_all[v0:v1], params, for_cfd=False
+    )
+    tris = rt_all[t0:t1]
+    if decimate_stride > 1 and len(tris) > 64:
+      tris = tris[::decimate_stride]
+
+    sname = EXPECTED_SOLIDS[int(solid_ids[i])]
+    mat = int(mat_ids[i])
+    meshes.append({
+        "part_id": int(pid),
+        "solid": sname,
+        "mat_id": mat,
+        "verts": verts,
+        "tris": tris,
+    })
+
+    if include_left_half and int(is_center[i]) == 0:
+      v_lh = verts.copy()
+      v_lh[:, 1] = -v_lh[:, 1]
+      t_lh = tris[:, [0, 2, 1]].copy()
+      meshes.append({
+          "part_id": int(pid),
+          "solid": sname,
+          "mat_id": mat,
+          "verts": v_lh,
+          "tris": t_lh,
+      })
+
+  return meshes
+
+
 def verify_stl_watertight(stl_path: Path) -> Dict[str, Any]:
-  """Pure-Python 2-manifold edge pairing & signed-volume check on ASCII STL."""
+  """Validates 6-solid closure, finite facets, signed volume & F1 bounds on STL."""
+  stl_path = Path(stl_path)
   if not stl_path.is_file():
     return {"watertight": False, "reason": f"Missing STL file: {stl_path}"}
 
-  text = stl_path.read_text(encoding="utf-8")
-  solids_found: List[str] = []
-  current_solid: str | None = None
-  edge_counts: Dict[Tuple[Tuple[int, int, int], Tuple[int, int, int]], int] = {}
-  vol6 = 0.0
-  verts_buf: List[Tuple[float, float, float]] = []
-  total_facets = 0
+  text = stl_path.read_text(encoding="utf-8", errors="replace")
+  if not text.strip():
+    return {"watertight": False, "reason": "Empty STL file."}
 
-  def _qkey(v: Tuple[float, float, float]) -> Tuple[int, int, int]:
-    return (int(round(v[0] * 1e5)), int(round(v[1] * 1e5)), int(round(v[2] * 1e5)))
+  solids_closed: List[str] = []
+  current_solid: str | None = None
+  solid_facets = 0
+  total_facets = 0
+  vol6 = 0.0
+  v_buf: List[Tuple[float, float, float]] = []
+  min_xyz = [1e30, 1e30, 1e30]
+  max_xyz = [-1e30, -1e30, -1e30]
 
   for raw in text.splitlines():
     line = raw.strip()
+    if not line:
+      continue
     if line.startswith("solid "):
-      current_solid = line.split(None, 1)[1]
-      solids_found.append(current_solid)
-      edge_counts.clear()
+      if current_solid is not None:
+        return {
+            "watertight": False,
+            "reason": f"Nested or unclosed solid block '{current_solid}'.",
+        }
+      current_solid = line.split(None, 1)[1].strip()
+      solid_facets = 0
       vol6 = 0.0
+      v_buf.clear()
     elif line.startswith("vertex "):
-      parts = line.split()
-      verts_buf.append((float(parts[1]), float(parts[2]), float(parts[3])))
-      if len(verts_buf) == 3:
-        v0, v1, v2 = verts_buf
-        verts_buf.clear()
+      if current_solid is None:
+        return {
+            "watertight": False,
+            "reason": "Vertex encountered outside solid block.",
+        }
+      toks = line.split()
+      if len(toks) < 4:
+        return {"watertight": False, "reason": f"Malformed vertex line: {line}"}
+      try:
+        vx, vy, vz = float(toks[1]), float(toks[2]), float(toks[3])
+      except ValueError:
+        return {"watertight": False, "reason": f"Non-float vertex: {line}"}
+      if not (math.isfinite(vx) and math.isfinite(vy) and math.isfinite(vz)):
+        return {"watertight": False, "reason": "Non-finite STL vertex."}
+      if vx < min_xyz[0]:
+        min_xyz[0] = vx
+      if vy < min_xyz[1]:
+        min_xyz[1] = vy
+      if vz < min_xyz[2]:
+        min_xyz[2] = vz
+      if vx > max_xyz[0]:
+        max_xyz[0] = vx
+      if vy > max_xyz[1]:
+        max_xyz[1] = vy
+      if vz > max_xyz[2]:
+        max_xyz[2] = vz
+      v_buf.append((vx, vy, vz))
+      if len(v_buf) == 3:
+        v0, v1, v2 = v_buf
+        v_buf.clear()
+        solid_facets += 1
         total_facets += 1
-        k0, k1, k2 = _qkey(v0), _qkey(v1), _qkey(v2)
-        for a, b in ((k0, k1), (k1, k2), (k2, k0)):
-          edge_counts[(a, b)] = edge_counts.get((a, b), 0) + 1
         vol6 += (
             (v0[1] * v1[2] - v0[2] * v1[1]) * v2[0]
             + (v0[2] * v1[0] - v0[0] * v1[2]) * v2[1]
             + (v0[0] * v1[1] - v0[1] * v1[0]) * v2[2]
         )
     elif line.startswith("endsolid"):
-      unpaired = sum(
-          1
-          for (a, b), cnt in edge_counts.items()
-          if edge_counts.get((b, a), 0) != cnt
-      )
-      if unpaired > 0:
+      if current_solid is None:
         return {
             "watertight": False,
-            "reason": f"Solid '{current_solid}' has {unpaired} unpaired edges.",
+            "reason": "Unexpected endsolid without matching solid.",
+        }
+      end_parts = line.split(None, 1)
+      end_name = end_parts[1].strip() if len(end_parts) > 1 else current_solid
+      if end_name != current_solid:
+        return {
+            "watertight": False,
+            "reason": (
+                f"Mismatched endsolid '{end_name}' for solid '{current_solid}'."
+            ),
+        }
+      if v_buf:
+        return {
+            "watertight": False,
+            "reason": f"Incomplete facet in solid '{current_solid}'.",
+        }
+      if solid_facets < 20:
+        return {
+            "watertight": False,
+            "reason": (
+                f"Solid '{current_solid}' has insufficient facets ({solid_facets})."
+            ),
         }
       if vol6 <= 0.0:
         return {
             "watertight": False,
-            "reason": f"Solid '{current_solid}' has non-positive volume.",
+            "reason": (
+                f"Solid '{current_solid}' has non-positive enclosed volume."
+            ),
         }
+      solids_closed.append(current_solid)
+      current_solid = None
 
-  missing = [s for s in EXPECTED_SOLIDS if s not in solids_found]
+  if current_solid is not None:
+    return {
+        "watertight": False,
+        "reason": f"Truncated STL: solid '{current_solid}' missing endsolid.",
+    }
+
+  missing = [s for s in EXPECTED_SOLIDS if s not in solids_closed]
   if missing:
     return {
         "watertight": False,
         "reason": f"Missing required STL solids: {missing}",
     }
 
+  if (
+      min_xyz[0] < -1.6
+      or max_xyz[0] > 4.6
+      or max_xyz[1] > 1.25
+      or max_xyz[2] > 1.35
+  ):
+    return {
+        "watertight": False,
+        "reason": f"STL bounding box out of F1 physical envelope: {min_xyz}..{max_xyz}",
+    }
+
   return {
       "watertight": True,
-      "solids": solids_found,
+      "solids": solids_closed,
       "total_facets": total_facets,
   }
